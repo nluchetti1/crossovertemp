@@ -35,11 +35,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Only add files that actually exist to avoid the fatal error
-          if [ -d "images" ]; then
-            git add images/*.png images/*.json 2>/dev/null || true
-            git add images/*.gif 2>/dev/null || true
-          fi
+          # Stage new files and remove deleted ones
+          git add images/*.png images/*.json images/*.gif 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "No changes to commit."
