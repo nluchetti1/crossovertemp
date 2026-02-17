@@ -13,7 +13,7 @@
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
         .info-bar { font-size: 0.9em; margin-bottom: 10px; color: #444; background: #e9ecef; padding: 10px; border-radius: 6px; }
-        .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
+        .logic-card { text-align: left; font-size: 0.9em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 25px; color: #333; line-height: 1.6; }
         .color-key { font-weight: bold; }
         .yellow { color: #b8860b; }
         .purple { color: #800080; }
@@ -28,20 +28,22 @@
         <button onclick="setMode('forecast')">View Forecast Loop</button>
         <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
-    <img id="map-frame" src="" alt="Fog Forecast Map">
+    <img id="map-frame" src="" alt="Fog Map Content">
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
         <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 120px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
+
     <div class="logic-card">
         <strong>Combo Technique Implementation:</strong><br><br>
-        1. <strong>Crossover Identification:</strong> Forecast triggers when the HRRR surface temperature (T) falls to or below the crossover temperature (T<sub>xover</sub>). T<sub>xover</sub> is defined as the dew point recorded at the time of maximum daytime heating.<br><br>
+        1. <strong>Crossover Identification:</strong> Forecast triggers when the HRRR surface temperature (<strong>T</strong>) falls to or below the crossover temperature (<strong>T<sub>xover</sub></strong>). <strong>T<sub>xover</sub></strong> is defined as the dew point recorded at the time of maximum daytime heating.<br><br>
         &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when <strong>T &le; T<sub>xover</sub></strong> (Visibility: 1-3 SM).<br>
         &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when <strong>T &le; T<sub>xover</sub> - 3&deg;F</strong> (Visibility: &lt; 1/2 SM).<br><br>
-        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if HRRR 925mb winds are <strong>&gt; 15 knots</strong>.
+        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if HRRR 925mb winds are <strong>&gt; 15 knots</strong>, as vertical mixing prevents radiation fog formation.
     </div>
 </div>
+
 <script>
     let runId = null, frame = 1, mode = 'forecast';
     async function start() {
