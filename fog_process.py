@@ -1,4 +1,5 @@
 import warnings
+# Suppress Herbie/Pandas regex warnings to keep logs clean
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
 import matplotlib.pyplot as plt
@@ -44,12 +45,10 @@ def add_map_features(ax):
 # ================= DYNAMIC CROSSOVER LOGIC =================
 print("Determining Crossover Temp at Peak Heating...")
 current_utc = datetime.utcnow()
-# Look back over the last 24 hours to find peak heating
 search_hours = 24
-times = [current_utc - timedelta(hours=i) for i in range(search_hours)]
 
 try:
-    # Use a representative hour (21Z) to initialize the grid size
+    # Use 21Z as the reference anchor for grid geometry
     ref_time = current_utc.replace(hour=21, minute=0, second=0, microsecond=0)
     if ref_time > current_utc: ref_time -= timedelta(days=1)
     
@@ -58,12 +57,11 @@ try:
     if isinstance(ds_ref, list): ds_ref = ds_ref[0]
     if 'nav_lon' in ds_ref.coords: ds_ref = ds_ref.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
 
-    # Arrays to track Max T and the corresponding Dew Point
     max_t_grid = np.full(ds_ref['t2m'].shape, -999.0)
     crossover_grid = np.zeros_like(max_t_grid)
 
-    # Scrape last 24 hours for Peak Heating
-    for t in [ref_time - timedelta(hours=i) for i in range(12)]: # Looking at afternoon window
+    # Scrape afternoon window for Peak Heating
+    for t in [ref_time - timedelta(hours=i) for i in range(12)]:
         try:
             H = Herbie(t, model='rtma', product='anl')
             ds = H.xarray(":(TMP|DPT):2 m")
@@ -72,7 +70,6 @@ try:
             temp_f = (ds['t2m'] - 273.15) * 9/5 + 32
             dwpt_f = (ds['d2m'] - 273.15) * 9/5 + 32
             
-            # Update crossover where current T is higher than previous Max T
             mask = temp_f.values > max_t_grid
             max_t_grid[mask] = temp_f.values[mask]
             crossover_grid[mask] = dwpt_f.values[mask]
@@ -82,14 +79,14 @@ try:
     longitude = ds_ref.longitude.values
     latitude = ds_ref.latitude.values
 
-    # Plot the Dynamic Crossover Map
+    # Plot the Threshold Analysis
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 78, 2)
     norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
     mesh = ax.pcolormesh(longitude, latitude, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
     plt.colorbar(mesh, ax=ax, label='Crossover Temp (at Peak Heating) °F', shrink=0.8, ticks=levels[::2])
-    plt.title(f"Dynamic Analysis: Crossover Threshold\nBased on Last 24h Peak Heating", loc='left', fontweight='bold')
+    plt.title(f"Analysis: Crossover Threshold (Max T Dewpoint)\nReference Date: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 
@@ -101,7 +98,7 @@ except Exception as e:
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Cleanup
+# Cleanup old PNGs
 for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
     if run_id not in f: os.remove(f)
 
@@ -125,7 +122,9 @@ for fxx in range(1, 19):
         hourly_winds[fxx] = round(float(wind_kt.mean().values), 1)
 
         fog_mask = np.zeros_like(temp_f)
+        # Mist (Yellow)
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
+        # Dense (Purple)
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -134,7 +133,14 @@ for fxx in range(1, 19):
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
                       transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
-        plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: +{fxx}h", loc='left', fontweight='bold', fontsize=12)
+        # Logic for requested Zulu Time title
+        valid_time_dt = hrrr_init_time + timedelta(hours=fxx)
+        zulu_str = valid_time_dt.strftime('%HZ')
+        
+        plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {zulu_str}", 
+                  loc='left', fontweight='bold', fontsize=12)
+        
+        # Static visibility legend
         ax.text(0.98, 1.05, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
         ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
