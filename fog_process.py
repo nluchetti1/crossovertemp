@@ -1,142 +1,128 @@
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import xarray as xr
 import numpy as np
 import os
 import json
+import imageio.v2 as imageio
 from datetime import datetime, timedelta
-from herbie import Herbie  # pip install herbie-data
+from herbie import Herbie
+import matplotlib.colors as mcolors
 
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Map bounds for the Mid-Atlantic
+EXTENT = [-83, -75, 33.5, 40.5] 
 
-# Define the region (Mid-Atlantic based on your image)
-EXTENT = [-84, -75, 33, 41] # [West, East, South, North]
+# Major Cities for spatial reference
+CITIES = [
+    [-77.43, 37.54, 'RIC'], [-78.64, 35.77, 'RDU'], 
+    [-76.28, 36.85, 'ORF'], [-79.94, 37.27, 'ROA'],
+    [-80.84, 35.22, 'CLT'], [-77.03, 38.90, 'DCA'],
+    [-81.63, 38.35, 'CRW'], [-76.61, 39.29, 'BWI']
+]
+
+def add_map_features(ax):
+    """Adds standard geographical features and city markers."""
+    ax.set_extent(EXTENT)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+    ax.add_feature(cfeature.STATES, linewidth=0.5)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    for lon, lat, name in CITIES:
+        ax.plot(lon, lat, 'ko', markersize=3, transform=ccrs.PlateCarree())
+        ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
+                fontsize=8, fontweight='bold', bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=1))
 
 # ================= DATE LOGIC =================
-# We need to find the latest *completed* run.
-# HRRR takes about 1-1.5 hours to upload. We look back 2 hours to be safe.
 current_utc = datetime.utcnow()
-model_init_time = current_utc - timedelta(hours=2)
+# Look back 2 hours to ensure the model run has finished uploading
+model_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+run_id = model_init_time.strftime("%Y%m%d_%Hz")
 
-# Round down to the nearest hour (e.g., 23:15 -> 23:00)
-model_init_time = model_init_time.replace(minute=0, second=0, microsecond=0)
+# ================= 1. GENERATE BINNED ANALYSIS PLOT =================
+print("Generating Binned Input Analysis...")
+try:
+    H_obs = Herbie(model_init_time, model='hrrr', product='sfc', fxx=0)
+    ds_obs = H_obs.xarray(":(DPT):2 m")
+    dpt_f = (ds_obs['d2m'] - 273.15) * 9/5 + 32
 
-# Generate the ID strings
-date_str = model_init_time.strftime("%Y%m%d") # 20260217
-hour_str = model_init_time.strftime("%H")     # 23
-run_id = f"{date_str}_{hour_str}z"            # 20260217_23z
+    fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+    add_map_features(ax)
 
-print(f"=======================================")
-print(f"Script Execution Time: {current_utc}")
-print(f"Target Model Run:      {run_id}")
-print(f"=======================================")
+    # Create 5-degree bins for the Crossover Temp (Dewpoint)
+    levels = np.arange(20, 75, 5)
+    cmap = plt.get_cmap('viridis', len(levels) - 1)
+    norm = mcolors.BoundaryNorm(levels, cmap.N)
 
-# ================= PROCESSING LOOP =================
-# HRRR Forecast hours 1 through 18
-forecast_hours = range(1, 19)
+    mesh = ax.pcolormesh(ds_obs.longitude, ds_obs.latitude, dpt_f, 
+                          cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    
+    plt.colorbar(mesh, ax=ax, orientation='vertical', label='Crossover Temp (Dewpoint) °F', shrink=0.7, pad=0.02)
+    plt.title(f"Input Analysis: Derived Crossover Temp\nValid: {model_init_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
+    
+    plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
+    plt.close()
+except Exception as e:
+    print(f"Analysis plot failed: {e}")
 
-for fxx in forecast_hours:
-    print(f"Processing Forecast Hour: {fxx:02d}...")
+# ================= 2. GENERATE FORECAST LOOP & GIF =================
+gif_frames = []
+print(f"Generating Forecast Loop for {run_id}...")
 
+for fxx in range(1, 19):
     try:
-        # 1. Initialize Herbie to fetch HRRR data
-        # We look for Surface fields (Temp and Dewpoint)
-        H = Herbie(
-            model_init_time,
-            model='hrrr',
-            product='sfc',
-            fxx=fxx
-        )
+        H = Herbie(model_init_time, model='hrrr', product='sfc', fxx=fxx)
+        ds = H.xarray(":(TMP|DPT):2 m")
 
-        # 2. Download/Open the specific variables we need
-        # We need 2m Temperature (t2m) and 2m Dewpoint (d2m)
-        # SearchString uses regex to grab only necessary layers to save bandwidth
-        ds = H.xarray(":(TMP|DPT):2 m above ground")
-
-        # 3. Extract Data & Apply Crossover Logic
-        # Note: 't2m' and 'd2m' variable names might vary slightly by GRIB source
-        # Usually in Herbie/cfgrib they map to 't2m' and 'd2m' or 't' and 'dpt'
+        temp_f = (ds['t2m'] - 273.15) * 9/5 + 32
+        dew_f = (ds['d2m'] - 273.15) * 9/5 + 32
+        dep = temp_f - dew_f 
         
-        # Verify variable names in your specific environment if this fails
-        temp_k = ds['t2m'] 
-        dew_k = ds['d2m']
-
-        # Convert Kelvin to Fahrenheit
-        temp_f = (temp_k - 273.15) * 9/5 + 32
-        dew_f = (dew_k - 273.15) * 9/5 + 32
-        
-        # --- CROSSOVER LOGIC ---
-        # NOTE: True Crossover logic requires the previous afternoon's Min Dewpoint Depression.
-        # Since this is a simple hourly run, we are approximating based on your image legend:
-        # "Yellow = Mist (T < Tx)" and "Purple = Dense Fog (T < Tx-3)"
-        
-        # Simple Fog Approximation (T - Td spread)
-        # Modify this math to match your exact Crossover formula
-        dep = temp_f - dew_f
-        
-        # Mask: 0 = Clear, 1 = Mist (Yellow), 2 = Dense Fog (Purple)
+        # 0=Clear, 1=Mist (Yellow), 2=Dense Fog (Purple)
         fog_mask = np.zeros_like(temp_f)
-        
-        # If Depression < 3.0 -> Mist (Yellow)
-        fog_mask[dep < 3.0] = 1 
-        # If Depression < 1.0 -> Dense Fog (Purple)
-        fog_mask[dep < 1.0] = 2 
+        fog_mask[dep <= 3.0] = 1   # T <= Txover (1-3 SM)
+        fog_mask[dep <= 0.0] = 2   # T <= Txover-3 (approx) (< 1/2 SM)
 
-        # ================= PLOTTING =================
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-        ax.set_extent(EXTENT)
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+        add_map_features(ax)
 
-        # Add Features
-        ax.add_feature(cfeature.COASTLINE)
-        ax.add_feature(cfeature.BORDERS)
-        ax.add_feature(cfeature.STATES, linewidth=0.5)
-
-        # Plot the Fog Mask
-        # We use a custom colormap: Transparent, Yellow, Purple
-        from matplotlib.colors import ListedColormap
-        cmap = ListedColormap(['none', 'gold', 'purple'])
-        
-        # Plot data (using pcolormesh for speed)
-        # Using a masked array to hide "Clear" areas
+        cmap_fog = mcolors.ListedColormap(['none', 'gold', 'purple'])
         masked_data = np.ma.masked_where(fog_mask == 0, fog_mask)
         
-        mesh = ax.pcolormesh(
-            ds.longitude, ds.latitude, masked_data,
-            transform=ccrs.PlateCarree(),
-            cmap=cmap,
-            vmin=0, vmax=2
-        )
+        ax.pcolormesh(ds.longitude, ds.latitude, masked_data, transform=ccrs.PlateCarree(), cmap=cmap_fog, vmin=0, vmax=2)
 
-        # Titles
+        # Labels & Legend
         valid_time = model_init_time + timedelta(hours=fxx)
-        plt.title(f"Crossover Fog Forecast\nInit: {hour_str}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=10, fontweight='bold')
-        plt.title("Yellow: Mist | Purple: Dense Fog", loc='right', fontsize=8, color='purple')
-
-        # Save Image
-        filename = f"fog_{run_id}_f{fxx:02d}.png"
-        save_path = os.path.join(OUTPUT_DIR, filename)
-        plt.savefig(save_path, bbox_inches='tight', dpi=100)
-        plt.close(fig)
+        plt.title(f"Fog Forecast | Init: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", 
+                  loc='left', fontweight='bold', fontsize=12)
         
-        print(f" -> Saved {filename}")
+        # Color-coded Title Legend
+        ax.text(0.98, 1.02, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
+        ax.text(0.70, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
 
+        fname = os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png")
+        plt.savefig(fname, bbox_inches='tight', dpi=100)
+        
+        # Add frame to GIF list
+        gif_frames.append(imageio.imread(fname))
+        plt.close()
+        print(f" -> Processed f{fxx:02d}")
+        
     except Exception as e:
-        print(f"Failed to process hour {fxx}: {e}")
+        print(f"Forecast hour {fxx} failed: {e}")
+
+# Save GIF
+if gif_frames:
+    print("Saving GIF Animation...")
+    imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
 # ================= STATUS UPDATE =================
-# This is the crucial handshake for your website
-status_data = {
-    "run_id": run_id,               # e.g. "20260217_23z"
-    "model_init": f"{hour_str}Z",   # e.g. "23Z"
-    "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
-}
+with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
+    json.dump({
+        "run_id": run_id, 
+        "model_init": f"{model_init_time.strftime('%H')}Z",
+        "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+    }, f)
 
-json_path = os.path.join(OUTPUT_DIR, "current_status.json")
-with open(json_path, "w") as f:
-    json.dump(status_data, f)
-
-print("Process Complete. Status updated.")
+print("Process Complete.")
