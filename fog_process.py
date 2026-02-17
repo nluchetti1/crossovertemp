@@ -18,6 +18,7 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Restored zoomed-out domain
 EXTENT = [-83, -75, 33.5, 40.5] 
 
 CITIES = [
@@ -30,7 +31,7 @@ def add_map_features(ax):
     ax.set_extent(EXTENT)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
     ax.add_feature(cfeature.STATES, linewidth=0.8)
-    # High-resolution County Boundaries
+    # County Boundaries added for local reference
     counties = cfeature.NaturalEarthFeature(
         category='cultural', name='admin_2_counties',
         scale='10m', facecolor='none'
@@ -45,10 +46,9 @@ def add_map_features(ax):
 # ================= DYNAMIC CROSSOVER LOGIC =================
 print("Determining Crossover Temp at Peak Heating...")
 current_utc = datetime.utcnow()
-search_hours = 24
 
 try:
-    # Use 21Z as the reference anchor for grid geometry
+    # Use 21Z as anchor
     ref_time = current_utc.replace(hour=21, minute=0, second=0, microsecond=0)
     if ref_time > current_utc: ref_time -= timedelta(days=1)
     
@@ -79,7 +79,7 @@ try:
     longitude = ds_ref.longitude.values
     latitude = ds_ref.latitude.values
 
-    # Plot the Threshold Analysis
+    # Threshold Analysis Plot
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 78, 2)
@@ -98,12 +98,11 @@ except Exception as e:
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Cleanup old PNGs
+# Cleanup
 for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
     if run_id not in f: os.remove(f)
 
 gif_frames = []
-hourly_winds = {}
 rtma_points = np.array([longitude.ravel(), latitude.ravel()]).T
 rtma_values = crossover_f.ravel()
 
@@ -119,7 +118,6 @@ for fxx in range(1, 19):
         
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
-        hourly_winds[fxx] = round(float(wind_kt.mean().values), 1)
 
         fog_mask = np.zeros_like(temp_f)
         # Mist (Yellow)
@@ -133,14 +131,14 @@ for fxx in range(1, 19):
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
                       transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
-        # Logic for requested Zulu Time title
+        # Updated Zulu Time titles
         valid_time_dt = hrrr_init_time + timedelta(hours=fxx)
         zulu_str = valid_time_dt.strftime('%HZ')
         
         plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {zulu_str}", 
                   loc='left', fontweight='bold', fontsize=12)
         
-        # Static visibility legend
+        # Legends on the far right
         ax.text(0.98, 1.05, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
         ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
@@ -154,4 +152,4 @@ if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gi
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", 
-               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC"), "avg_winds": hourly_winds}, f)
+               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
