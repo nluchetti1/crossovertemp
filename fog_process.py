@@ -14,6 +14,7 @@ OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 EXTENT = [-81.5, -76.5, 33.8, 37.0] 
 
+# Target NC Airports
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -31,9 +32,7 @@ def add_map_features(ax):
 
 # ================= DATE LOGIC =================
 current_utc = datetime.utcnow()
-# Afternoon 21Z is our "Crossover" reference point (Peak Heating)
-# If it's early in the day, we look at 21Z from YESTERDAY. 
-# If it's after 21Z, we use TODAY'S 21Z.
+# Per the paper: Use 21Z (Afternoon Peak Heating) for Crossover Threshold
 if current_utc.hour < 22:
     target_date = current_utc - timedelta(days=1)
 else:
@@ -41,36 +40,33 @@ else:
 
 rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# ================= 1. FETCH RTMA CROSSOVER (STATIC THRESHOLD) =================
-print(f"Fetching RTMA Analysis for {rtma_time}Z...")
+# ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
+print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
 try:
     H_rtma = Herbie(rtma_time, model='rtma', product='sfc')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
-    # This is our STATIC crossover threshold per pixel
-    crossover_temp_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
+    crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
-    # Save a plot of the threshold for the "Input Analysis" view
+    # Generate Binned Analysis Plot (2-degree steps)
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 76, 2)
     cmap = plt.get_cmap('turbo', len(levels) - 1)
     norm = mcolors.BoundaryNorm(levels, cmap.N)
-    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_temp_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    plt.colorbar(mesh, ax=ax, label='RTMA 21Z Crossover Temp °F', shrink=0.8)
-    plt.title(f"Crossover Threshold (RTMA 21Z Dewpoint)\nReference Date: {rtma_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
+    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    plt.colorbar(mesh, ax=ax, label='Crossover Temp (RTMA 21Z Dewpoint) °F', shrink=0.8)
+    plt.title(f"Crossover Threshold Analysis\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
-    print(f"RTMA Fetch Failed: {e}. Falling back to HRRR f00 for threshold.")
-    # Fallback logic if RTMA is delayed
+    print(f"RTMA Fetch Failed: {e}. Using HRRR f00 fallback.")
     H_fallback = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=0)
     ds_fallback = H_fallback.xarray(":(DPT):2 m")
-    crossover_temp_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
+    crossover_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
 
-# ================= 2. GENERATE COMBO FORECAST =================
+# ================= 2. GENERATE FORECAST LOOP (COMBO TECHNIQUE) =================
 gif_frames = []
 for fxx in range(1, 19):
     try:
@@ -78,20 +74,16 @@ for fxx in range(1, 19):
         # Fetch HRRR SFC Temp and 925mb Winds
         ds_fcst = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         
-        # Ensure HRRR and RTMA grids match (Herbie handles most of this, but we interpolate to be safe)
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
-        # Interpolate RTMA threshold to HRRR grid
-        thresh_on_grid = crossover_temp_f.interp_like(temp_f)
+        thresh_on_grid = crossover_f.interp_like(temp_f)
         
-        # Calculate 925mb Winds
+        # Calculate 925mb Wind Speed (Combo Filter <= 15kts)
         u925, v925 = ds_fcst['u925'], ds_fcst['v925']
         wind_kt = np.sqrt(u925**2 + v925**2) * 1.94384
 
-        # Logic
         fog_mask = np.zeros_like(temp_f)
-        # Mist: T <= Tx AND Wind <= 15kts
+        # Condition: Temp <= Crossover AND Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
-        # Dense: T <= (Tx - 3) AND Wind <= 15kts
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -101,12 +93,13 @@ for fxx in range(1, 19):
                       transform=ccrs.PlateCarree(), cmap=cmap_fog, vmin=0, vmax=2)
 
         valid_time = hrrr_init_time + timedelta(hours=fxx)
-        plt.title(f"Combo Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z", loc='left', fontweight='bold')
-        ax.text(0.98, 1.02, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
-        ax.text(0.70, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
+        plt.title(f"Combo Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z", loc='left', fontweight='bold')
+        ax.text(0.98, 1.05, "Dense (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
+        ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
-        plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
-        gif_frames.append(imageio.imread(os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png")))
+        fname = os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png")
+        plt.savefig(fname, bbox_inches='tight', dpi=100)
+        gif_frames.append(imageio.imread(fname))
         plt.close()
     except Exception as e: print(f"F{fxx} failed: {e}")
 
