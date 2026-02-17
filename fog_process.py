@@ -1,5 +1,5 @@
 import warnings
-# Suppress Herbie/Pandas regex warnings to keep logs clean
+# Suppress the Herbie/Pandas regex warnings to prevent log hang
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
 import matplotlib.pyplot as plt
@@ -18,7 +18,8 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-# Restored zoomed-out domain
+
+# Mid-Atlantic Zoom
 EXTENT = [-83, -75, 33.5, 40.5] 
 
 CITIES = [
@@ -31,7 +32,9 @@ def add_map_features(ax):
     ax.set_extent(EXTENT)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
     ax.add_feature(cfeature.STATES, linewidth=0.8)
-    # County Boundaries added for local reference
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    
+    # County Boundaries
     counties = cfeature.NaturalEarthFeature(
         category='cultural', name='admin_2_counties',
         scale='10m', facecolor='none'
@@ -43,12 +46,12 @@ def add_map_features(ax):
         ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
                 fontsize=9, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
 
-# ================= DYNAMIC CROSSOVER LOGIC =================
-print("Determining Crossover Temp at Peak Heating...")
+# ================= 1. DYNAMIC PEAK HEATING LOGIC =================
+print("Calculating Crossover Temp at Peak Heating...")
 current_utc = datetime.utcnow()
 
 try:
-    # Use 21Z as anchor
+    # Anchor to 21Z for grid geometry
     ref_time = current_utc.replace(hour=21, minute=0, second=0, microsecond=0)
     if ref_time > current_utc: ref_time -= timedelta(days=1)
     
@@ -60,52 +63,46 @@ try:
     max_t_grid = np.full(ds_ref['t2m'].shape, -999.0)
     crossover_grid = np.zeros_like(max_t_grid)
 
-    # Scrape afternoon window for Peak Heating
     for t in [ref_time - timedelta(hours=i) for i in range(12)]:
         try:
             H = Herbie(t, model='rtma', product='anl')
             ds = H.xarray(":(TMP|DPT):2 m")
             if isinstance(ds, list): ds = ds[0]
-            
             temp_f = (ds['t2m'] - 273.15) * 9/5 + 32
             dwpt_f = (ds['d2m'] - 273.15) * 9/5 + 32
-            
             mask = temp_f.values > max_t_grid
             max_t_grid[mask] = temp_f.values[mask]
             crossover_grid[mask] = dwpt_f.values[mask]
         except: continue
 
     crossover_f = crossover_grid
-    longitude = ds_ref.longitude.values
-    latitude = ds_ref.latitude.values
+    lon_rtma = ds_ref.longitude.values
+    lat_rtma = ds_ref.latitude.values
 
-    # Threshold Analysis Plot
+    # Analysis Plot
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 78, 2)
     norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
-    mesh = ax.pcolormesh(longitude, latitude, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
-    plt.colorbar(mesh, ax=ax, label='Crossover Temp (at Peak Heating) °F', shrink=0.8, ticks=levels[::2])
-    plt.title(f"Analysis: Crossover Threshold (Max T Dewpoint)\nReference Date: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
+    mesh = ax.pcolormesh(lon_rtma, lat_rtma, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
+    plt.colorbar(mesh, ax=ax, label='Crossover Temp (Max T Dewpoint) °F', shrink=0.8, ticks=levels[::2])
+    plt.title(f"Dynamic Crossover Threshold Analysis\nReference: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 
 except Exception as e:
-    print(f"Dynamic peak heating logic failed: {e}")
+    print(f"Logic Error: {e}")
     exit(1)
 
 # ================= 2. FORECAST LOOP =================
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Cleanup
-for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
-    if run_id not in f: os.remove(f)
-
-gif_frames = []
-rtma_points = np.array([longitude.ravel(), latitude.ravel()]).T
+# Flatten RTMA for griddata mapping
+rtma_points = np.array([lon_rtma.ravel(), lat_rtma.ravel()]).T
 rtma_values = crossover_f.ravel()
 
+gif_frames = []
 for fxx in range(1, 19):
     try:
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
@@ -114,15 +111,14 @@ for fxx in range(1, 19):
         if 'nav_lon' in ds_fcst.coords: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
+        # Map RTMA to HRRR grid
         thresh_on_grid = griddata(rtma_points, rtma_values, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
         
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
-        # Mist (Yellow)
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
-        # Dense (Purple)
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -131,14 +127,11 @@ for fxx in range(1, 19):
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
                       transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
-        # Updated Zulu Time titles
-        valid_time_dt = hrrr_init_time + timedelta(hours=fxx)
-        zulu_str = valid_time_dt.strftime('%HZ')
-        
+        # Dynamic Zulu Titles
+        zulu_str = (hrrr_init_time + timedelta(hours=fxx)).strftime('%HZ')
         plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {zulu_str}", 
                   loc='left', fontweight='bold', fontsize=12)
         
-        # Legends on the far right
         ax.text(0.98, 1.05, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
         ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
@@ -146,7 +139,7 @@ for fxx in range(1, 19):
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
-    except Exception as e: print(f"F{fxx} failed: {e}")
+    except: continue
 
 if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
