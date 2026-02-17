@@ -1,5 +1,4 @@
 import warnings
-# Suppress the Herbie/Pandas regex warnings to prevent log hang
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
 import matplotlib.pyplot as plt
@@ -18,11 +17,8 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Shifted Domain South to center North Carolina
 EXTENT = [-83, -75, 31.5, 38.5] 
 
-# Target NC Airports
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -34,7 +30,6 @@ def add_map_features(ax):
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
     ax.add_feature(cfeature.STATES, linewidth=0.8)
     ax.add_feature(cfeature.BORDERS, linestyle=':')
-    
     counties = cfeature.NaturalEarthFeature(
         category='cultural', name='admin_2_counties',
         scale='10m', facecolor='none'
@@ -42,7 +37,7 @@ def add_map_features(ax):
     ax.add_feature(counties, edgecolor='gray', linewidth=0.3)
 
 # ================= 1. DYNAMIC PEAK HEATING LOGIC =================
-print("Calculating Crossover Temp at Peak Heating...")
+print("Starting Dynamic Crossover Analysis...")
 current_utc = datetime.utcnow()
 
 try:
@@ -59,73 +54,63 @@ try:
 
     for t in [ref_time - timedelta(hours=i) for i in range(12)]:
         try:
-            H = Herbie(t, model='rtma', product='anl')
+            H = Herbie(t, model='rtma', product='anl', verbose=False)
             ds = H.xarray(":(TMP|DPT):2 m")
             if isinstance(ds, list): ds = ds[0]
-            temp_f = (ds['t2m'] - 273.15) * 9/5 + 32
-            dwpt_f = (ds['d2m'] - 273.15) * 9/5 + 32
-            mask = temp_f.values > max_t_grid
-            max_t_grid[mask] = temp_f.values[mask]
-            crossover_grid[mask] = dwpt_f.values[mask]
+            temp_f = (ds['t2m'].values - 273.15) * 9/5 + 32
+            dwpt_f = (ds['d2m'].values - 273.15) * 9/5 + 32
+            mask = temp_f > max_t_grid
+            max_t_grid[mask] = temp_f[mask]
+            crossover_grid[mask] = dwpt_f[mask]
         except: continue
 
     crossover_f = crossover_grid
     lon_rtma = ds_ref.longitude.values
     lat_rtma = ds_ref.latitude.values
 
-    # Analysis Plot
     fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
-    
     levels = np.arange(20, 78, 2)
     cmap = plt.get_cmap('turbo', len(levels) - 1)
     norm = mcolors.BoundaryNorm(levels, cmap.N)
-    
     mesh = ax.pcolormesh(lon_rtma, lat_rtma, crossover_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    
     cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.8, ticks=levels)
     cbar.set_label('Crossover Temp (Max T Dewpoint) °F', fontweight='bold')
     
-    # Add readout labels at each airport
     for lon, lat, name in CITIES:
-        # Interpolate the specific max T and crossover values for this point
         pt_max_t = griddata((lon_rtma.ravel(), lat_rtma.ravel()), max_t_grid.ravel(), (lon, lat), method='linear')
         pt_xover = griddata((lon_rtma.ravel(), lat_rtma.ravel()), crossover_f.ravel(), (lon, lat), method='linear')
-        
         ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-        label_text = f"{name}\nMaxT: {pt_max_t:.0f}°\nCovr: {pt_xover:.0f}°"
-        ax.text(lon + 0.08, lat, label_text, transform=ccrs.PlateCarree(), 
-                fontsize=8, fontweight='bold', va='center',
+        ax.text(lon + 0.08, lat, f"{name}\nMaxT: {pt_max_t:.0f}°\nCovr: {pt_xover:.0f}°", 
+                transform=ccrs.PlateCarree(), fontsize=8, fontweight='bold', va='center',
                 bbox=dict(facecolor='white', alpha=0.85, edgecolor='black', pad=2))
 
     plt.title(f"Dynamic Crossover Threshold Analysis\nReference: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=130)
     plt.close()
-
 except Exception as e:
-    print(f"Logic Error: {e}")
+    print(f"Analysis failed: {e}")
     exit(1)
 
 # ================= 2. FORECAST LOOP =================
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-rtma_points = np.array([lon_rtma.ravel(), lat_rtma.ravel()]).T
-rtma_values = crossover_f.ravel()
+rtma_pts = np.array([lon_rtma.ravel(), lat_rtma.ravel()]).T
+rtma_vals = crossover_f.ravel()
 
 gif_frames = []
 for fxx in range(1, 19):
     try:
-        H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
+        H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx, verbose=False)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         ds_fcst = ds_list[0].merge(ds_list[1], compat='override') if isinstance(ds_list, list) else ds_list
         if 'nav_lon' in ds_fcst.coords: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
-        temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
-        thresh_on_grid = griddata(rtma_points, rtma_values, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
-        
+        temp_f = (ds_fcst['t2m'].values - 273.15) * 9/5 + 32
+        thresh_on_grid = griddata(rtma_pts, rtma_vals, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
-        wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
+        wind_kt = np.sqrt(ds_fcst[u_var].values**2 + ds_fcst[v_var].values**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
@@ -133,20 +118,16 @@ for fxx in range(1, 19):
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
         add_map_features(ax)
-        # Re-add basic airport names for the forecast loop
         for lon, lat, name in CITIES:
             ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
             ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
                     fontsize=9, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
 
-        cmap = mcolors.ListedColormap(['none', 'gold', 'purple'])
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
-                      transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
+                      transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), vmin=0, vmax=2)
 
-        zulu_str = (hrrr_init_time + timedelta(hours=fxx)).strftime('%HZ')
-        plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {zulu_str}", 
-                  loc='left', fontweight='bold', fontsize=12)
-        
+        z_str = (hrrr_init_time + timedelta(hours=fxx)).strftime('%HZ')
+        plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {z_str}", loc='left', fontweight='bold', fontsize=12)
         ax.text(0.98, 1.05, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
         ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
@@ -154,10 +135,12 @@ for fxx in range(1, 19):
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
+        print(f"Processed F{fxx:02d}")
     except: continue
 
 if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
+# Overwrite JSON cleanly
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", 
-               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+               "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
