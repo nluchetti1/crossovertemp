@@ -61,8 +61,6 @@
         document.getElementById('map-frame').src = `images/fog_${runId}_f${frame.toString().padStart(2, '0')}.png`;
         const windVal = winds[frame] || '--';
         document.getElementById('label').innerText = `Hour: +${frame} (Avg Wind: ${windVal} kt)`;
-        
-        // Logic: Highlight if winds are low (higher fog potential)
         const alert = document.getElementById('risk-alert');
         if (parseFloat(windVal) < 8) {
             alert.innerText = "Fog Risk: ELEVATED (Low Winds)";
