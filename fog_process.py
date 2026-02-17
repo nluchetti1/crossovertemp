@@ -17,6 +17,10 @@ LOOKBACK_HOURS = 6
 FORECAST_HOURS = 18
 OUTPUT_DIR = "images"
 
+# --- DOMAIN SETTINGS (NC/VA/TN/SC) ---
+# Format: [West Longitude, East Longitude, South Latitude, North Latitude]
+PLOT_EXTENT = [-85, -75, 32, 38] 
+
 def get_crossover_temp():
     """
     Calculates TXover: Minimum dewpoint observed during warmest daytime hours.
@@ -31,8 +35,6 @@ def get_crossover_temp():
         time_step = now - timedelta(hours=i)
         try:
             # Fetch HRRR Analysis (fxx=0) for Surface Dewpoint
-            # We wrap this in a loop to try slightly older runs if the exact hour is missing
-            # But for Lookback, we usually accept what we can get.
             H = Herbie(time_step, model="hrrr", product="sfc", fxx=0)
             ds = H.xarray(":(DPT):2 m above ground")
             
@@ -55,15 +57,11 @@ def get_crossover_temp():
 def process_forecast(txover):
     print("--- Processing Forecast ---")
     
-    # --- KEY FIX: USE A "SAFE" RUN TIME ---
-    # Models take 1-2 hours to upload. If it's 04:30 UTC, the 04:00 run isn't ready.
-    # We go back 2 hours to ensure we get a complete run.
+    # Use a safe run time (2 hours ago) to ensure data availability
     model_init_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    
     print(f"Using Model Run: {model_init_time} UTC")
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
     success_count = 0
 
     for fxx in range(1, FORECAST_HOURS + 1):
@@ -75,19 +73,34 @@ def process_forecast(txover):
             t_sfc_f = (ds['t2m'] - 273.15) * 9/5 + 32
             
             # --- ALGORITHM ---
+            # 1 = Mist (Yellow)
+            # 2 = Dense Fog (Purple)
             fog_mask = np.zeros_like(t_sfc_f)
-            fog_mask[t_sfc_f <= txover] = 1        # Mist
-            fog_mask[t_sfc_f <= (txover - 3.0)] = 2 # Dense Fog
+            
+            # Logic: If T <= Txover, it's at least Mist.
+            fog_mask[t_sfc_f <= txover] = 1        
+            
+            # Logic: If T is MORE than 3 degrees below Txover, it upgrades to Dense Fog.
+            fog_mask[t_sfc_f <= (txover - 3.0)] = 2 
             
             # --- PLOTTING ---
-            fig = plt.figure(figsize=(10, 8))
+            fig = plt.figure(figsize=(12, 10)) # Slightly larger for zoom
             ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linewidth=0.5)
-            ax.add_feature(cfeature.STATES, linewidth=0.3)
             
+            # SET THE ZOOM (NC/VA/TN/SC)
+            ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
+            
+            # Add Features
+            ax.add_feature(cfeature.COASTLINE, linewidth=1, edgecolor='black')
+            ax.add_feature(cfeature.BORDERS, linewidth=1, edgecolor='black')
+            ax.add_feature(cfeature.STATES, linewidth=0.8, edgecolor='black')
+            
+            # Custom Colormap: Transparent -> Yellow -> Purple
             from matplotlib.colors import ListedColormap
-            cmap = ListedColormap(['none', '#FFEB3B', '#9C27B0']) 
+            # index 0 (masked) = transparent
+            # index 1 (Mist) = Bright Yellow
+            # index 2 (Dense) = Deep Purple
+            cmap = ListedColormap(['none', '#FFEB3B', '#8E24AA']) 
             
             data_to_plot = np.ma.masked_where(fog_mask == 0, fog_mask)
             
@@ -96,20 +109,13 @@ def process_forecast(txover):
                                cmap=cmap, 
                                shading='auto')
             
-            # Valid time is Model Init + Forecast Hour
+            # Titles
             valid_time = model_init_time + timedelta(hours=fxx)
+            plt.title(f"Crossover Fog Forecast (NC/VA/TN/SC)\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=12, fontweight='bold')
+            plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=9, color='purple')
             
-            plt.title(f"Crossover Fog Forecast\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=10)
-            plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=8, color='purple')
-            
-            # Filename based on VALID time so website logic stays simple
-            # NOTE: We use the Run Time in filename for uniqueness, but index.html looks for this specific format
+            # Save
             filename = f"fog_{datetime.utcnow().strftime('%Y%m%d')}_23z_f{fxx:02d}.png"
-            
-            # To make it easier for the website (which looks for '23z'), we force the filename 
-            # to match what the website expects for "Today's Run", even if the data is from 21z or 22z.
-            # This is a 'hack' to keep the Javascript simple.
-            
             save_path = os.path.join(OUTPUT_DIR, filename)
             plt.savefig(save_path, bbox_inches='tight', dpi=100)
             plt.close()
@@ -121,7 +127,6 @@ def process_forecast(txover):
         except Exception as e:
             print(f"Failed to generate frame {fxx}: {e}")
 
-    # Fail if 0 images
     if success_count == 0:
         print("ERROR: 0 images were generated. Exiting.")
         sys.exit(1)
