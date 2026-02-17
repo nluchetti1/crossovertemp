@@ -21,6 +21,20 @@ OUTPUT_DIR = "images"
 # --- DOMAIN SETTINGS (NC/VA/TN/SC) ---
 PLOT_EXTENT = [-85, -75, 32, 38] 
 
+def get_counties_feature():
+    """
+    Safely attempts to download/load US Counties. 
+    Returns None if download fails (to prevent script crash).
+    """
+    try:
+        print("Attempting to load County Shapefiles...")
+        reader = shpreader.Reader(shpreader.natural_earth(resolution='10m', category='cultural', name='admin_2_counties_lakes_north_america'))
+        counties = list(reader.geometries())
+        return cfeature.ShapelyFeature(counties, ccrs.PlateCarree())
+    except Exception as e:
+        print(f"WARNING: Could not load counties (Server 404 or Timeout). Skipping county lines. Error: {e}")
+        return None
+
 def get_crossover_temp():
     """
     Calculates TXover: Minimum dewpoint observed during warmest daytime hours.
@@ -43,7 +57,7 @@ def get_crossover_temp():
             dps.append(dpt_f)
             print(f"Loaded Dewpoint for {time_step}")
         except Exception as e:
-            print(f"Skipping {time_step} (Data likely unavailable): {e}")
+            print(f"Skipping {time_step}: {e}")
 
     if not dps:
         print("CRITICAL: No dewpoint data found.")
@@ -52,13 +66,11 @@ def get_crossover_temp():
     # Stack and find minimum Dewpoint per pixel
     concat_da = xr.concat(dps, dim='time')
     txover = concat_da.min(dim='time')
-    
-    # Preserve coordinates for plotting
     return txover
 
-def plot_crossover_map(txover, ds_sample):
+def plot_crossover_map(txover, ds_sample, counties_feature):
     """
-    Generates a static map of the calculated Crossover Temp (Min Afternoon Dewpoint).
+    Generates a static map of the calculated Crossover Temp.
     """
     print("--- Generating Crossover Analysis Map ---")
     try:
@@ -71,11 +83,9 @@ def plot_crossover_map(txover, ds_sample):
         ax.add_feature(cfeature.BORDERS, linewidth=1)
         ax.add_feature(cfeature.STATES, linewidth=1)
         
-        # Add Counties
-        reader = shpreader.Reader(shpreader.natural_earth(resolution='10m', category='cultural', name='admin_2_counties_lakes_north_america'))
-        counties = list(reader.geometries())
-        COUNTIES = cfeature.ShapelyFeature(counties, ccrs.PlateCarree())
-        ax.add_feature(COUNTIES, facecolor='none', edgecolor='gray', linewidth=0.3)
+        # Add Counties if available
+        if counties_feature:
+            ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3)
 
         # Plot Data
         cs = ax.pcolormesh(ds_sample.longitude, ds_sample.latitude, txover, 
@@ -96,7 +106,7 @@ def plot_crossover_map(txover, ds_sample):
     except Exception as e:
         print(f"Failed to generate crossover map: {e}")
 
-def process_forecast(txover):
+def process_forecast(txover, counties_feature):
     print("--- Processing Forecast ---")
     
     # Safe run time
@@ -105,12 +115,6 @@ def process_forecast(txover):
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     success_count = 0
-
-    # Load Counties Reader once to save time in loop
-    print("Loading County Shapefiles...")
-    reader = shpreader.Reader(shpreader.natural_earth(resolution='10m', category='cultural', name='admin_2_counties_lakes_north_america'))
-    counties = list(reader.geometries())
-    COUNTIES = cfeature.ShapelyFeature(counties, ccrs.PlateCarree())
 
     for fxx in range(1, FORECAST_HOURS + 1):
         try:
@@ -132,7 +136,9 @@ def process_forecast(txover):
             ax.add_feature(cfeature.COASTLINE, linewidth=1)
             ax.add_feature(cfeature.BORDERS, linewidth=1)
             ax.add_feature(cfeature.STATES, linewidth=0.8)
-            ax.add_feature(COUNTIES, facecolor='none', edgecolor='gray', linewidth=0.3, alpha=0.5)
+            
+            if counties_feature:
+                ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3, alpha=0.5)
             
             # Colormap
             from matplotlib.colors import ListedColormap
@@ -144,7 +150,6 @@ def process_forecast(txover):
             
             valid_time = model_init_time + timedelta(hours=fxx)
             
-            # Updated Title (Removed Location String)
             plt.title(f"Crossover Fog Forecast\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=12, fontweight='bold')
             plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=9, color='purple')
             
@@ -166,21 +171,22 @@ def process_forecast(txover):
 
 if __name__ == "__main__":
     try:
-        # Get Txover
+        # 1. Load Counties (Fail gracefully if server down)
+        counties_feat = get_counties_feature()
+
+        # 2. Get Txover
         txover_grid = get_crossover_temp()
         
-        # --- FIX: USE SAFE TIME FOR SAMPLE DATA TOO ---
-        # Was previously grabbing 'now', which caused the crash
+        # 3. Get Sample Data (using SAFE time)
         safe_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-        
         H_sample = Herbie(safe_time, model="hrrr", product="sfc", fxx=0)
         ds_sample = H_sample.xarray(":(DPT):2 m above ground")
         
-        # Plot the Crossover Map
-        plot_crossover_map(txover_grid, ds_sample)
+        # 4. Plot Analysis Map
+        plot_crossover_map(txover_grid, ds_sample, counties_feat)
         
-        # Run Forecast
-        process_forecast(txover_grid)
+        # 5. Run Forecast
+        process_forecast(txover_grid, counties_feat)
         
     except Exception as e:
         print(f"Critical Error: {e}")
