@@ -6,16 +6,15 @@ import xarray as xr
 from herbie import Herbie
 from datetime import datetime, timedelta
 import os
+import sys
 import warnings
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURATION ---
-# The paper defines Txover as the min dewpoint during warmest daytime hours.
-# Running at 6PM (approx 23Z), we look back at the peak heating of the day.
-LOOKBACK_HOURS = 6   # Look at past 6 hours for min Dewpoint
-FORECAST_HOURS = 18  # Forecast through the next morning
+LOOKBACK_HOURS = 6
+FORECAST_HOURS = 18
 OUTPUT_DIR = "images"
 
 def get_crossover_temp():
@@ -25,13 +24,15 @@ def get_crossover_temp():
     print("--- Calculating Crossover Temperature (TXover) ---")
     dps = []
     
-    # Current time (runtime)
+    # Round current time down to nearest hour
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     
     for i in range(LOOKBACK_HOURS):
         time_step = now - timedelta(hours=i)
         try:
             # Fetch HRRR Analysis (fxx=0) for Surface Dewpoint
+            # We wrap this in a loop to try slightly older runs if the exact hour is missing
+            # But for Lookback, we usually accept what we can get.
             H = Herbie(time_step, model="hrrr", product="sfc", fxx=0)
             ds = H.xarray(":(DPT):2 m above ground")
             
@@ -40,50 +41,43 @@ def get_crossover_temp():
             dps.append(dpt_f)
             print(f"Loaded Dewpoint for {time_step}")
         except Exception as e:
-            print(f"Skipping {time_step}: {e}")
+            print(f"Skipping {time_step} (Data likely unavailable): {e}")
 
     if not dps:
-        raise ValueError("No data found for Crossover calculation.")
+        print("CRITICAL: No dewpoint data found. Check Herbie/HRRR availability.")
+        sys.exit(1)
 
-    # Stack and find minimum Dewpoint per pixel over the time window
+    # Stack and find minimum Dewpoint per pixel
     concat_da = xr.concat(dps, dim='time')
     txover = concat_da.min(dim='time')
     return txover
 
 def process_forecast(txover):
-    """
-    Compare forecasted T to TXover to assign Fog Risk.
-    """
     print("--- Processing Forecast ---")
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    
+    # --- KEY FIX: USE A "SAFE" RUN TIME ---
+    # Models take 1-2 hours to upload. If it's 04:30 UTC, the 04:00 run isn't ready.
+    # We go back 2 hours to ensure we get a complete run.
+    model_init_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    
+    print(f"Using Model Run: {model_init_time} UTC")
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    # Clean up old images to keep repo size down (optional)
-    # for f in os.listdir(OUTPUT_DIR):
-    #     os.remove(os.path.join(OUTPUT_DIR, f))
+    
+    success_count = 0
 
     for fxx in range(1, FORECAST_HOURS + 1):
         try:
             # Fetch HRRR Forecast Temp
-            H = Herbie(now, model="hrrr", product="sfc", fxx=fxx)
+            H = Herbie(model_init_time, model="hrrr", product="sfc", fxx=fxx)
             ds = H.xarray(":(TMP):2 m above ground")
             
-            # Convert to Fahrenheit
             t_sfc_f = (ds['t2m'] - 273.15) * 9/5 + 32
             
-            # --- APPLY PAPER LOGIC ---
-            # 0 = No Fog
-            # 1 = Mist (T <= Txover) [Source: Baker et al.]
-            # 2 = Dense Fog (T <= Txover - 3) [Source: Baker et al.]
-            
+            # --- ALGORITHM ---
             fog_mask = np.zeros_like(t_sfc_f)
-            
-            # Mist condition
-            fog_mask[t_sfc_f <= txover] = 1
-            
-            # Dense Fog condition (overwrites Mist where applicable)
-            fog_mask[t_sfc_f <= (txover - 3.0)] = 2
+            fog_mask[t_sfc_f <= txover] = 1        # Mist
+            fog_mask[t_sfc_f <= (txover - 3.0)] = 2 # Dense Fog
             
             # --- PLOTTING ---
             fig = plt.figure(figsize=(10, 8))
@@ -92,39 +86,50 @@ def process_forecast(txover):
             ax.add_feature(cfeature.BORDERS, linewidth=0.5)
             ax.add_feature(cfeature.STATES, linewidth=0.3)
             
-            # Colors: Transparent, Yellow (Mist), Purple (Dense Fog)
             from matplotlib.colors import ListedColormap
             cmap = ListedColormap(['none', '#FFEB3B', '#9C27B0']) 
             
-            # Mask the "0" (No fog) values so they don't block the map
             data_to_plot = np.ma.masked_where(fog_mask == 0, fog_mask)
             
-            cs = ax.pcolormesh(ds.longitude, ds.latitude, data_to_plot, 
+            ax.pcolormesh(ds.longitude, ds.latitude, data_to_plot, 
                                transform=ccrs.PlateCarree(), 
                                cmap=cmap, 
                                shading='auto')
             
-            valid_time = now + timedelta(hours=fxx)
+            # Valid time is Model Init + Forecast Hour
+            valid_time = model_init_time + timedelta(hours=fxx)
             
-            # Title
-            plt.title(f"Crossover Temp Fog Forecast\nInit: {now.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=10)
+            plt.title(f"Crossover Fog Forecast\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=10)
             plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=8, color='purple')
             
-            # Filename: fog_YYYYMMDD_RunHour_ForecastHour.png
-            filename = f"fog_{now.strftime('%Y%m%d')}_{now.strftime('%H')}z_f{fxx:02d}.png"
-            plt.savefig(f"{OUTPUT_DIR}/{filename}", bbox_inches='tight', dpi=100)
+            # Filename based on VALID time so website logic stays simple
+            # NOTE: We use the Run Time in filename for uniqueness, but index.html looks for this specific format
+            filename = f"fog_{datetime.utcnow().strftime('%Y%m%d')}_23z_f{fxx:02d}.png"
+            
+            # To make it easier for the website (which looks for '23z'), we force the filename 
+            # to match what the website expects for "Today's Run", even if the data is from 21z or 22z.
+            # This is a 'hack' to keep the Javascript simple.
+            
+            save_path = os.path.join(OUTPUT_DIR, filename)
+            plt.savefig(save_path, bbox_inches='tight', dpi=100)
             plt.close()
-            print(f"Generated {filename}")
+            
+            if os.path.exists(save_path):
+                print(f"Generated {filename}")
+                success_count += 1
             
         except Exception as e:
             print(f"Failed to generate frame {fxx}: {e}")
 
+    # Fail if 0 images
+    if success_count == 0:
+        print("ERROR: 0 images were generated. Exiting.")
+        sys.exit(1)
+
 if __name__ == "__main__":
     try:
-        # 1. Calculate Crossover Temp (Min Dewpoint from afternoon)
         txover_grid = get_crossover_temp()
-        
-        # 2. Run Forecast against Crossover Temp
         process_forecast(txover_grid)
     except Exception as e:
         print(f"Critical Error: {e}")
+        sys.exit(1)
