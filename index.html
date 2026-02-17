@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NC Fog Dashboard (Combo Technique)</title>
+    <title>NC Combo Fog Dashboard</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
         .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; }
-        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; transition: 0.2s; }
+        button:hover { background: #483582; }
         .btn-alt { background: #495057; }
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
@@ -17,7 +18,7 @@
 
 <div class="wrapper">
     <h2 style="margin-bottom:5px;">NC Fog Forecast Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Updating dashboard...</div>
+    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Fetching Latest Data...</div>
 
     <div class="controls">
         <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
@@ -25,11 +26,11 @@
         <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
 
-    <img id="map-frame" src="" alt="Fog Map">
+    <img id="map-frame" src="" alt="Fog Map Content">
 
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
 </div>
