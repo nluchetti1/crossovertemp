@@ -1,4 +1,5 @@
 import warnings
+# Suppress the Herbie/Pandas regex warnings to keep logs clean
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
 import matplotlib.pyplot as plt
@@ -17,8 +18,11 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Centered Domain on North Carolina
 EXTENT = [-83, -75, 31.5, 38.5] 
 
+# Target NC Airports
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -78,19 +82,25 @@ try:
     mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
     plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels, label='°F')
     
-    points = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
+    # Robust coordinate lookup for airport labels
+    rtma_points = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
     for lon, lat, name in CITIES:
-        val_max_t = griddata(points, max_t_grid.ravel(), (lon, lat), method='linear')
-        val_xover = griddata(points, xover_grid.ravel(), (lon, lat), method='linear')
+        # Using griddata to interpolate at the exact site
+        val_max_t = griddata(rtma_points, max_t_grid.ravel(), (lon, lat), method='linear')
+        val_xover = griddata(rtma_points, xover_grid.ravel(), (lon, lat), method='linear')
+        
         ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
         
-        # FIX OVERLAP: Move KINT label to the left, others to the right
+        # Shift KINT label to the left to avoid overlap with KGSO
         x_offset = -0.12 if name == 'KINT' else 0.08
         ha_val = 'right' if name == 'KINT' else 'left'
         
-        label_txt = f"{name}\nMaxT: {val_max_t:.0f}°\nCovr: {val_xover:.0f}°"
-        ax.text(lon + x_offset, lat, label_txt, transform=ccrs.PlateCarree(), 
-                fontsize=8, fontweight='bold', va='center', ha=ha_val,
+        # Display readout; fallback to "N/A" if griddata returns NaN
+        t_str = f"{val_max_t:.0f}°" if not np.isnan(val_max_t) else "N/A"
+        c_str = f"{val_xover:.0f}°" if not np.isnan(val_xover) else "N/A"
+        
+        ax.text(lon + x_offset, lat, f"{name}\nMaxT: {t_str}\nCovr: {c_str}", 
+                transform=ccrs.PlateCarree(), fontsize=8, fontweight='bold', va='center', ha=ha_val,
                 bbox=dict(facecolor='white', alpha=0.85, edgecolor='black', pad=2))
 
     plt.title(f"Dynamic Crossover Analysis | Ref: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
@@ -103,11 +113,11 @@ except Exception as e:
 hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
-rtma_flat_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
+# Flatten points for HRRR grid mapping
 rtma_flat_vals = xover_grid.ravel()
 
 gif_frames = []
-for fxx in range(1, 19):
+for fxx in range(1, 2):
     try:
         H_fcst = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=fxx, verbose=False)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
@@ -117,7 +127,9 @@ for fxx in range(1, 19):
         f_temp = (ds_f['t2m'].values - 273.15) * 9/5 + 32
         u_925, v_925 = (ds_f['u925'].values, ds_f['v925'].values) if 'u925' in ds_f else (ds_f['u'].values, ds_f['v'].values)
         f_wind = np.sqrt(u_925**2 + v_925**2) * 1.94384
-        f_thresh = griddata(rtma_flat_pts, rtma_flat_vals, (ds_f.longitude.values, ds_f.latitude.values), method='linear')
+        
+        # Mapping RTMA Threshold onto HRRR grid
+        f_thresh = griddata(rtma_points, rtma_flat_vals, (ds_f.longitude.values, ds_f.latitude.values), method='linear')
 
         fog_layer = np.zeros_like(f_temp)
         fog_layer[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
@@ -126,7 +138,6 @@ for fxx in range(1, 19):
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
         add_map_features(ax)
         for lon, lat, name in CITIES:
-            # Consistent label placement for KINT/KGSO overlap in forecast loop too
             x_off = -0.05 if name == 'KINT' else 0.05
             h_align = 'right' if name == 'KINT' else 'left'
             ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
