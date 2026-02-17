@@ -12,6 +12,7 @@
         .btn-alt { background: #495057; }
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
+        .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
     </style>
 </head>
 <body>
@@ -32,6 +33,12 @@
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
         <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
+    </div>
+
+    <div class="logic-card">
+        <strong>Combo Technique Implementation:</strong><br>
+        1. <strong>Crossover:</strong> Triggered if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
+        2. <strong>Stability Filter:</strong> Forecast is suppressed if HRRR 925mb winds &gt; 15 knots, as momentum mixing impedes fog formation.
     </div>
 </div>
 
