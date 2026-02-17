@@ -2,111 +2,76 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NC Crossover Fog Dashboard</title>
+    <title>NC Fog Dashboard (RTMA + HRRR)</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; color: #333; }
-        .wrapper { max-width: 1050px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
-        .status-box { background: #f1f3f5; padding: 10px; border-radius: 6px; font-size: 0.85em; margin-bottom: 20px; color: #495057; }
-        .btn-group { margin-bottom: 20px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
-        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
-        .btn-primary { background: #5d469f; color: white; }
-        .btn-primary:hover { background: #483582; }
-        .btn-secondary { background: #495057; color: white; }
-        .btn-download { background: #2b8a3e; color: white; text-decoration: none; padding: 12px 20px; border-radius: 6px; display: inline-block; font-size: 13.3px; }
-        #map-display img { width: 100%; border-radius: 8px; border: 1px solid #dee2e6; }
-        .nav-controls { margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 10px; border: 1px solid #e9ecef; }
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
+        .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; }
+        .btn-alt { background: #495057; }
+        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+        .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
     </style>
 </head>
 <body>
 
 <div class="wrapper">
-    <h2 style="margin-top:0;">Crossover Fog Forecast</h2>
-    <div class="status-box" id="status-text">Synchronizing with latest HRRR run...</div>
+    <h2>Combo Fog Technique: RTMA 21Z Threshold + HRRR 925mb Filter</h2>
+    <div id="status-bar" style="font-size: 0.85em; margin-bottom: 10px; color: #666;">Initializing...</div>
 
-    <div class="btn-group">
-        <button class="btn-secondary" onclick="viewAnalysis()">View Precision Analysis</button>
-        <button class="btn-primary" onclick="viewForecast()">View Forecast Loop</button>
-        <a href="images/fog_animation.gif" download class="btn-download">Download Animation</a>
+    <div class="controls">
+        <button class="btn-alt" onclick="setMode('analysis')">RTMA 21Z Crossover Map</button>
+        <button onclick="setMode('forecast')">HRRR Forecast Loop</button>
+        <a href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
 
-    <div id="map-display">
-        <img id="active-map" src="" alt="Fog Map Content">
-    </div>
+    <img id="map-frame" src="" alt="Fog Map">
 
-    <div class="nav-controls" id="nav-group">
-        <button onclick="changeFrame(-1)">&#8592; Previous Hour</button>
-        <span id="frame-label" style="margin: 0 25px; font-weight: bold; min-width: 150px; display: inline-block;">Hour: --</span>
-        <button onclick="changeFrame(1)">Next Hour &#8594;</button>
-        <button id="loop-toggle" onclick="togglePlay()" style="margin-left: 20px; background: #1971c2; color: white;">Play Loop</button>
+    <div class="nav" id="nav-ui">
+        <button onclick="changeFrame(-1)">&#8592; Prev</button>
+        <span id="label" style="margin: 0 20px; font-weight: bold;">Hour: --</span>
+        <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
 </div>
 
 <script>
-    let currentId = null;
-    let currentHour = 1;
-    let loopTimer = null;
-    let inAnalysis = false;
+    let runId = null;
+    let frame = 1;
+    let mode = 'forecast';
 
-    async function loadData() {
-        try {
-            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
-            const d = await r.json();
-            currentId = d.run_id;
-            document.getElementById('status-text').innerText = `Model: ${d.model_init} | Last Update: ${d.generated_at}`;
-            viewForecast();
-        } catch (err) {
-            document.getElementById('status-text').innerText = "Update in progress or data unavailable.";
+    async function start() {
+        const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+        const d = await r.json();
+        runId = d.run_id;
+        document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+        setMode('forecast');
+    }
+
+    function setMode(m) {
+        mode = m;
+        if (mode === 'analysis') {
+            document.getElementById('map-frame').src = 'images/crossover_analysis.png';
+            document.getElementById('nav-ui').style.visibility = 'hidden';
+        } else {
+            document.getElementById('nav-ui').style.visibility = 'visible';
+            update();
         }
     }
 
-    function refreshMap() {
-        if (!currentId || inAnalysis) return;
-        const f = currentHour.toString().padStart(2, '0');
-        document.getElementById('active-map').src = `images/fog_${currentId}_f${f}.png`;
-        document.getElementById('frame-label').innerText = `Forecast Hour: +${currentHour}`;
+    function update() {
+        const f = frame.toString().padStart(2, '0');
+        document.getElementById('map-frame').src = `images/fog_${runId}_f${f}.png`;
+        document.getElementById('label').innerText = `Forecast Hour: +${frame}`;
     }
 
-    function viewAnalysis() {
-        stopPlay();
-        inAnalysis = true;
-        document.getElementById('active-map').src = 'images/crossover_analysis.png';
-        document.getElementById('frame-label').innerText = "Historical Analysis View";
-        document.getElementById('nav-group').style.opacity = "0.4";
+    function changeFrame(d) {
+        frame += d;
+        if (frame > 18) frame = 1;
+        if (frame < 1) frame = 18;
+        update();
     }
 
-    function viewForecast() {
-        inAnalysis = false;
-        document.getElementById('nav-group').style.opacity = "1";
-        refreshMap();
-    }
-
-    function changeFrame(delta) {
-        if (inAnalysis) viewForecast();
-        currentHour += delta;
-        if (currentHour > 18) currentHour = 1;
-        if (currentHour < 1) currentHour = 18;
-        refreshMap();
-    }
-
-    function togglePlay() {
-        if (inAnalysis) viewForecast();
-        if (loopTimer) { stopPlay(); } 
-        else {
-            loopTimer = setInterval(() => changeFrame(1), 650);
-            document.getElementById('loop-toggle').innerText = "Stop Loop";
-            document.getElementById('loop-toggle').style.background = "#fa5252";
-        }
-    }
-
-    function stopPlay() {
-        clearInterval(loopTimer);
-        loopTimer = null;
-        document.getElementById('loop-toggle').innerText = "Play Loop";
-        document.getElementById('loop-toggle').style.background = "#1971c2";
-    }
-
-    loadData();
+    start();
 </script>
-
 </body>
 </html>
