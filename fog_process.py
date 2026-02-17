@@ -43,7 +43,7 @@ def get_crossover_temp():
             dps.append(dpt_f)
             print(f"Loaded Dewpoint for {time_step}")
         except Exception as e:
-            print(f"Skipping {time_step}: {e}")
+            print(f"Skipping {time_step} (Data likely unavailable): {e}")
 
     if not dps:
         print("CRITICAL: No dewpoint data found.")
@@ -169,9 +169,11 @@ if __name__ == "__main__":
         # Get Txover
         txover_grid = get_crossover_temp()
         
-        # Get a sample DS for coordinate plotting in the static map
-        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
-        H_sample = Herbie(now, model="hrrr", product="sfc", fxx=0)
+        # --- FIX: USE SAFE TIME FOR SAMPLE DATA TOO ---
+        # Was previously grabbing 'now', which caused the crash
+        safe_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        
+        H_sample = Herbie(safe_time, model="hrrr", product="sfc", fxx=0)
         ds_sample = H_sample.xarray(":(DPT):2 m above ground")
         
         # Plot the Crossover Map
