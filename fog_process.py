@@ -41,7 +41,6 @@ rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Cleanup
 for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
     if run_id not in f: os.remove(f)
 
@@ -52,10 +51,12 @@ try:
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
     
-    # Force coordinate names
-    if 'nav_lon' in ds_rtma.coords: ds_rtma = ds_rtma.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+    # Rename coordinates to standard names if necessary
+    rename_dict = {}
+    if 'nav_lon' in ds_rtma.coords: rename_dict['nav_lon'] = 'longitude'
+    if 'nav_lat' in ds_rtma.coords: rename_dict['nav_lat'] = 'latitude'
+    if rename_dict: ds_rtma = ds_rtma.rename(rename_dict)
     
-    # Convert to DataArray and ensure lat/lon are coords
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
 
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -79,24 +80,26 @@ for fxx in range(1, 19):
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         
-        # Merge datasets if list returned
         if isinstance(ds_list, list):
             ds_fcst = ds_list[0].merge(ds_list[1], compat='override')
         else:
             ds_fcst = ds_list
-        
-        # Force coordinate names for HRRR
+            
         if 'nav_lon' in ds_fcst.coords: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         
-        # INTERPOLATION: Use the .interp() method with lat/lon directly
-        # This bypasses the x/y dimension size mismatch
-        thresh_on_grid = crossover_f.interp(
-            longitude=ds_fcst.longitude, 
-            latitude=ds_fcst.latitude, 
-            method='linear'
-        )
+        # --- ROBUST INTERPOLATION ---
+        # We broadcast the RTMA crossover data onto the HRRR grid points manually 
+        # to avoid the 'Dimension' mismatch errors caused by x/y vs lat/lon.
+        from scipy.interpolate import griddata
+        
+        # Flatten the RTMA data for scipy
+        points = np.array([ds_rtma.longitude.values.ravel(), ds_rtma.latitude.values.ravel()]).T
+        values = crossover_f.values.ravel()
+        
+        # Interpolate onto HRRR grid
+        thresh_on_grid = griddata(points, values, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
         
         u_var = 'u925' if 'u925' in ds_fcst else 'u'
         v_var = 'v925' if 'v925' in ds_fcst else 'v'
