@@ -6,6 +6,7 @@ import os
 import json
 import glob
 import imageio.v2 as imageio
+from scipy.interpolate import griddata
 from datetime import datetime, timedelta
 from herbie import Herbie
 import matplotlib.colors as mcolors
@@ -41,6 +42,7 @@ rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
+# Cleanup old PNGs
 for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
     if run_id not in f: os.remove(f)
 
@@ -51,11 +53,8 @@ try:
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
     
-    # Rename coordinates to standard names if necessary
-    rename_dict = {}
-    if 'nav_lon' in ds_rtma.coords: rename_dict['nav_lon'] = 'longitude'
-    if 'nav_lat' in ds_rtma.coords: rename_dict['nav_lat'] = 'latitude'
-    if rename_dict: ds_rtma = ds_rtma.rename(rename_dict)
+    # Standardize coordinate names
+    if 'nav_lon' in ds_rtma.coords: ds_rtma = ds_rtma.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
     
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
 
@@ -65,6 +64,7 @@ try:
     norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
     mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
     plt.colorbar(mesh, ax=ax, label='RTMA 21Z Crossover Threshold °F', shrink=0.8, ticks=levels[::2])
+    plt.title(f"Input Analysis: Crossover Threshold\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
@@ -75,34 +75,26 @@ except Exception as e:
 gif_frames = []
 hourly_winds = {}
 
+# Flatten RTMA for griddata interpolation
+rtma_points = np.array([ds_rtma.longitude.values.ravel(), ds_rtma.latitude.values.ravel()]).T
+rtma_values = crossover_f.values.ravel()
+
 for fxx in range(1, 19):
     try:
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
+        ds_fcst = ds_list[0].merge(ds_list[1], compat='override') if isinstance(ds_list, list) else ds_list
         
-        if isinstance(ds_list, list):
-            ds_fcst = ds_list[0].merge(ds_list[1], compat='override')
-        else:
-            ds_fcst = ds_list
-            
         if 'nav_lon' in ds_fcst.coords: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         
-        # --- ROBUST INTERPOLATION ---
-        # We broadcast the RTMA crossover data onto the HRRR grid points manually 
-        # to avoid the 'Dimension' mismatch errors caused by x/y vs lat/lon.
-        from scipy.interpolate import griddata
+        # Robust Interpolation using SciPy
+        thresh_on_grid = griddata(rtma_points, rtma_values, 
+                                  (ds_fcst.longitude.values, ds_fcst.latitude.values), 
+                                  method='linear')
         
-        # Flatten the RTMA data for scipy
-        points = np.array([ds_rtma.longitude.values.ravel(), ds_rtma.latitude.values.ravel()]).T
-        values = crossover_f.values.ravel()
-        
-        # Interpolate onto HRRR grid
-        thresh_on_grid = griddata(points, values, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
-        
-        u_var = 'u925' if 'u925' in ds_fcst else 'u'
-        v_var = 'v925' if 'v925' in ds_fcst else 'v'
+        u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
         avg_wind = float(wind_kt.mean().values)
         hourly_winds[fxx] = round(avg_wind, 1)
@@ -124,8 +116,7 @@ for fxx in range(1, 19):
         gif_frames.append(imageio.imread(fname))
         plt.close()
         print(f"✅ F{fxx} done")
-    except Exception as e: 
-        print(f"❌ F{fxx} failed: {e}")
+    except Exception as e: print(f"❌ F{fxx} failed: {e}")
 
 if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
