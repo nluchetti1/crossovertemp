@@ -3,22 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Radiation Fog Viewer</title>
+    <title>Crossover Fog Forecast</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <style>
-        /* [Paste the exact CSS from your prompt here] */
-        /* Change body background slightly to make yellow mist visible */
-        body { font-family: 'Segoe UI', sans-serif; background: #e0e0e0; margin: 0; display: flex; flex-direction: column; align-items: center; padding: 10px; height: 100vh; box-sizing: border-box; }
-        /* Keep other CSS the same */
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #f4f4f9; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 10px; 
+            height: 100vh; 
+            box-sizing: border-box; 
+        }
+        h2 { margin: 5px 0; color: #333; font-size: 1.2rem; }
+        .controls { margin-bottom: 5px; font-size: 13px; color: #555; display: flex; align-items: center; gap: 15px; }
+        
+        button#download-btn {
+            background-color: #673AB7; /* Purple for fog */
+            color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;
+        }
+        button#download-btn:hover { background-color: #512DA8; }
+        button#download-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        .timeline-container {
+            display: grid; grid-template-columns: repeat(18, 1fr); /* 18 Forecast hours */
+            width: 100%; max-width: 1000px; gap: 1px; margin-bottom: 5px; background: #fff; padding: 3px; border-radius: 5px;
+        }
+        .time-box {
+            background: #e9ecef; border: 1px solid #ced4da; text-align: center; font-size: 10px; padding: 4px 0; cursor: pointer;
+        }
+        .time-box:hover { background: #d1c4e9; }
+        .time-box.active { background: #673AB7; color: white; font-weight: bold; }
+
+        #map-container {
+            width: auto; max-width: 100%; height: auto; background: #fff; border: 1px solid #ccc; 
+            display: flex; align-items: center; justify-content: center; padding: 5px; position: relative;
+        }
+        #forecast-img { max-height: 80vh; max-width: 100%; display: block; }
+        #loader { position: absolute; display: flex; flex-direction: column; align-items: center; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #673AB7; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-    <h2 id="page-title">Radiation Fog Forecast (Crossover Method)</h2>
+    <h2 id="page-title">Crossover Temp Fog Forecast</h2>
     
     <div class="controls">
         <span id="run-info">Loading...</span> | 
-        <span><strong>Yellow</strong> = Mist (1-3mi) | <strong>Purple</strong> = Dense Fog (&lt;0.5mi)</span>
+        <span><span style="color:#FFEB3B; background:#555; padding:0 4px;">Yellow = Mist</span> <span style="color:#9C27B0; font-weight:bold;">Purple = Dense Fog</span></span>
         <button id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
     </div>
 
@@ -27,31 +62,31 @@
     <div id="map-container">
         <div id="loader">
             <div class="spinner"></div>
-            <span>Loading Map...</span>
+            <br><span>Loading Forecast...</span>
         </div>
         <img id="forecast-img" src="" alt="Map Display" onerror="this.style.display='none'">
     </div>
 
 <script>
     // CONFIGURATION
-    const totalHours = 18; // Matches the python script
+    const totalHours = 18; 
     const imageDir = "images/";
     
     // --- DATE LOGIC ---
-    // We want to find the most recent 23Z run.
+    // We run at 23Z. If current hour < 23, show Yesterday's run.
     const now = new Date();
+    const currentUtcHour = now.getUTCHours();
     
-    // If it's before 23Z, show yesterday's 23Z run. 
-    // If it's after 23Z, show today's 23Z run.
-    if (now.getUTCHours() < 23) {
-        now.setUTCDate(now.getUTCDate() - 1);
+    let runDate = new Date(now);
+    if (currentUtcHour < 23) {
+        runDate.setUTCDate(runDate.getUTCDate() - 1);
     }
     
-    const yyyy = now.getUTCFullYear();
-    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(now.getUTCDate()).padStart(2, '0');
+    const yyyy = runDate.getUTCFullYear();
+    const mm = String(runDate.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(runDate.getUTCDate()).padStart(2, '0');
     const dateStr = `${yyyy}${mm}${dd}`;
-    const runHour = '23'; // Fixed run time based on your Cron
+    const runHour = '23'; 
 
     document.getElementById('run-info').textContent = `Run: ${dateStr} ${runHour}Z`;
 
@@ -62,10 +97,8 @@
     const btn = document.getElementById('download-btn');
     let boxes = [];
 
-    // --- IMAGE LOADING LOGIC ---
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
-        // Filename matches Python script: fog_20231027_23z_f01.png
         const filename = `fog_${dateStr}_${runHour}z_f${fhrStr}.png`;
         
         loader.style.display = 'flex';
@@ -91,37 +124,43 @@
         boxes.push(box);
     }
 
-    setImage(1);
+    setImage(1); // Load first frame
 
-    // Keyboard Controls
-    document.addEventListener('keydown', (e) => {
-        let currentSrc = imgElement.src;
-        let match = currentSrc.match(/_f(\d+)\.png/);
-        if (!match) return;
-        let currentFhr = parseInt(match[1]);
-
-        if (e.key === "ArrowRight") {
-            let next = currentFhr + 1;
-            if (next <= totalHours) setImage(next);
-        } else if (e.key === "ArrowLeft") {
-            let prev = currentFhr - 1;
-            if (prev >= 1) setImage(prev);
-        }
-    });
-
-    // --- GIF GENERATION LOGIC ---
-    // [Keep the exact GIF generation logic from your previous file]
+    // --- GIF GENERATION (Standard) ---
     async function generateGIF() {
-       // ... (Use the same code as your previous HTML)
-       // Just ensure filenames inside this function match the new `fog_...` convention
-        const gif = new GIF({ workers: 2, quality: 10, width: imgElement.naturalWidth, height: imgElement.naturalHeight });
-        for (let i = 1; i <= totalHours; i++) {
-            const fhrStr = String(i).padStart(2, '0');
-            const filename = `fog_${dateStr}_${runHour}z_f${fhrStr}.png`; // Updated filename
-            const url = imageDir + filename;
-            // ... rest of logic
+        btn.disabled = true;
+        btn.textContent = "Processing...";
+        try {
+            const workerResponse = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+            const workerBlob = await workerResponse.blob();
+            const workerUrl = URL.createObjectURL(workerBlob);
+
+            const gif = new GIF({ workers: 2, quality: 10, workerScript: workerUrl, width: imgElement.naturalWidth, height: imgElement.naturalHeight });
+
+            for (let i = 1; i <= totalHours; i++) {
+                const fhrStr = String(i).padStart(2, '0');
+                const filename = `fog_${dateStr}_${runHour}z_f${fhrStr}.png`;
+                const img = new Image();
+                img.crossOrigin = "Anonymous";
+                await new Promise((resolve) => {
+                    img.onload = () => { gif.addFrame(img, {delay: 250}); resolve(); };
+                    img.onerror = () => { resolve(); };
+                    img.src = imageDir + filename;
+                });
+            }
+            gif.on('finished', function(blob) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `fog_loop_${dateStr}.gif`;
+                link.click();
+                btn.textContent = "Download Animated GIF";
+                btn.disabled = false;
+            });
+            gif.render();
+        } catch (e) {
+            console.error(e);
+            btn.textContent = "Error";
         }
-       // ...
     }
 </script>
 </body>
