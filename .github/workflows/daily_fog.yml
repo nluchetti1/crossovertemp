@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,11 +35,15 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Pull latest changes to avoid "rejected" error
+          git pull --rebase origin main
+          
           git add images/*.png images/*.json images/*.gif 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
             git commit -m "Update Fog Maps: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            git push
+            git push origin main
           fi
