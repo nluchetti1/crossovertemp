@@ -2,7 +2,6 @@ name: Hourly Fog Update
 
 on:
   schedule:
-    # 6 PM EST = 23:00 UTC | 5 AM EST = 10:00 UTC
     - cron: '15 23,0-10 * * *'
   workflow_dispatch:
 
@@ -25,7 +24,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install matplotlib cartopy netCDF4 xarray herbie-data imageio 
+          pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy
 
       - name: Execute Fog Processing
         run: python fog_process.py
@@ -34,8 +33,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Stage new files and remove deleted ones
           git add images/*.png images/*.json images/*.gif 2>/dev/null || true
           
           if git diff --staged --quiet; then
