@@ -1,193 +1,279 @@
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-import cartopy.io.shapereader as shpreader
-import numpy as np
-import xarray as xr
-from herbie import Herbie
-from datetime import datetime, timedelta
-import os
-import sys
-import warnings
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crossover Fog Forecast</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #f4f4f9; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 10px; 
+            height: 100vh; 
+            box-sizing: border-box; 
+        }
+        h2 { margin: 5px 0; color: #333; font-size: 1.2rem; }
+        
+        /* Control Bar */
+        .controls { 
+            margin-bottom: 8px; 
+            font-size: 13px; 
+            color: #555; 
+            display: flex; 
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center; 
+            gap: 10px; 
+        }
+        
+        button {
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        button:hover { background: #eee; }
+        button#download-btn {
+            background-color: #673AB7; 
+            color: white; border: none; font-weight: bold;
+        }
+        button#download-btn:hover { background-color: #512DA8; }
+        button#download-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
-# Suppress warnings
-warnings.filterwarnings("ignore")
+        /* Timeline */
+        .timeline-container {
+            display: grid; grid-template-columns: repeat(18, 1fr); 
+            width: 100%; max-width: 800px; gap: 1px; margin-bottom: 5px; 
+            background: #fff; padding: 3px; border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .time-box {
+            background: #e9ecef; border: 1px solid #ced4da; 
+            text-align: center; font-size: 10px; padding: 4px 0; 
+            cursor: pointer; user-select: none;
+        }
+        .time-box:hover { background: #d1c4e9; }
+        .time-box.active { background: #673AB7; color: white; font-weight: bold; }
 
-# --- CONFIGURATION ---
-LOOKBACK_HOURS = 6
-FORECAST_HOURS = 18
-OUTPUT_DIR = "images"
+        /* Map Area */
+        #map-container {
+            flex-grow: 1;
+            width: 100%; max-width: 1200px;
+            background: #fff; border: 1px solid #ccc; 
+            display: flex; align-items: center; justify-content: center; 
+            padding: 5px; position: relative;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        #forecast-img { 
+            max-height: 100%; max-width: 100%; 
+            object-fit: contain; 
+            display: block; 
+        }
+        
+        /* Loaders & Errors */
+        #loader, #error-msg { 
+            position: absolute; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center;
+            background: rgba(255,255,255,0.9);
+            padding: 20px;
+            border-radius: 8px;
+        }
+        #error-msg { display: none; color: red; text-align: center; }
+        .spinner { 
+            border: 4px solid #f3f3f3; 
+            border-top: 4px solid #673AB7; 
+            border-radius: 50%; 
+            width: 40px; height: 40px; 
+            animation: spin 1s linear infinite; 
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
 
-# --- DOMAIN SETTINGS (NC/VA/TN/SC) ---
-PLOT_EXTENT = [-85, -75, 32, 38] 
-
-def get_counties_feature():
-    """
-    Safely attempts to download/load US Counties. 
-    Returns None if download fails (to prevent script crash).
-    """
-    try:
-        print("Attempting to load County Shapefiles...")
-        reader = shpreader.Reader(shpreader.natural_earth(resolution='10m', category='cultural', name='admin_2_counties_lakes_north_america'))
-        counties = list(reader.geometries())
-        return cfeature.ShapelyFeature(counties, ccrs.PlateCarree())
-    except Exception as e:
-        print(f"WARNING: Could not load counties (Server 404 or Timeout). Skipping county lines. Error: {e}")
-        return None
-
-def get_crossover_temp():
-    """
-    Calculates TXover: Minimum dewpoint observed during warmest daytime hours.
-    """
-    print("--- Calculating Crossover Temperature (TXover) ---")
-    dps = []
+    <h2 id="page-title">Crossover Fog Forecast</h2>
     
-    # Round current time down to nearest hour
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    <div class="controls">
+        <button onclick="toggleView('forecast')" id="btn-forecast" style="font-weight:bold; border-color:#673AB7;">Forecast Loop</button>
+        <button onclick="toggleView('analysis')" id="btn-analysis">View Input Analysis</button>
+        <button id="download-btn" onclick="generateGIF()">Download GIF</button>
+    </div>
     
-    for i in range(LOOKBACK_HOURS):
-        time_step = now - timedelta(hours=i)
-        try:
-            # Fetch HRRR Analysis (fxx=0) for Surface Dewpoint
-            H = Herbie(time_step, model="hrrr", product="sfc", fxx=0)
-            ds = H.xarray(":(DPT):2 m above ground")
-            
-            # Convert Kelvin to Fahrenheit
-            dpt_f = (ds['d2m'] - 273.15) * 9/5 + 32
-            dps.append(dpt_f)
-            print(f"Loaded Dewpoint for {time_step}")
-        except Exception as e:
-            print(f"Skipping {time_step}: {e}")
+    <div class="controls">
+        <span id="run-info">Initializing...</span> | 
+        <span><span style="color:#FFEB3B; background:#555; padding:0 4px; border-radius:3px;">Yellow = Mist</span> <span style="color:#9C27B0; font-weight:bold;">Purple = Dense Fog</span></span>
+    </div>
 
-    if not dps:
-        print("CRITICAL: No dewpoint data found.")
-        sys.exit(1)
+    <div class="timeline-container" id="timeline"></div>
 
-    # Stack and find minimum Dewpoint per pixel
-    concat_da = xr.concat(dps, dim='time')
-    txover = concat_da.min(dim='time')
-    return txover
+    <div id="map-container">
+        <div id="loader">
+            <div class="spinner"></div>
+            <br><span id="loader-text">Finding latest run...</span>
+        </div>
+        <div id="error-msg">
+            <strong>Map Not Found</strong><br>
+            <span id="error-details">Waiting for data...</span>
+        </div>
+        <img id="forecast-img" src="" alt="Map Display">
+    </div>
 
-def plot_crossover_map(txover, ds_sample, counties_feature):
-    """
-    Generates a static map of the calculated Crossover Temp.
-    """
-    print("--- Generating Crossover Analysis Map ---")
-    try:
-        fig = plt.figure(figsize=(12, 10))
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-        ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
-
-        # Features
-        ax.add_feature(cfeature.COASTLINE, linewidth=1)
-        ax.add_feature(cfeature.BORDERS, linewidth=1)
-        ax.add_feature(cfeature.STATES, linewidth=1)
-        
-        # Add Counties if available
-        if counties_feature:
-            ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3)
-
-        # Plot Data
-        cs = ax.pcolormesh(ds_sample.longitude, ds_sample.latitude, txover, 
-                           transform=ccrs.PlateCarree(), 
-                           cmap='BrBG', vmin=20, vmax=70, shading='auto')
-        
-        cbar = plt.colorbar(cs, orientation='horizontal', pad=0.05, aspect=50)
-        cbar.set_label("Dewpoint (°F)")
-
-        plt.title(f"Calculated Crossover Temp (Min Afternoon Dewpoint)\nBased on lowest Td from last {LOOKBACK_HOURS} hours", fontweight='bold')
-        
-        filename = "crossover_analysis.png"
-        save_path = os.path.join(OUTPUT_DIR, filename)
-        plt.savefig(save_path, bbox_inches='tight', dpi=100)
-        plt.close()
-        print(f"Generated {filename}")
-        
-    except Exception as e:
-        print(f"Failed to generate crossover map: {e}")
-
-def process_forecast(txover, counties_feature):
-    print("--- Processing Forecast ---")
+<script>
+    // CONFIGURATION
+    const totalHours = 18; 
+    const imageDir = "images/";
     
-    # Safe run time
-    model_init_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    print(f"Using Model Run: {model_init_time} UTC")
+    // --- ROBUST DATE LOGIC ---
+    // We try to find the "Latest" 23Z run. 
+    // If it's 20:00 UTC today, the latest run was Yesterday 23Z.
+    // If it's 23:30 UTC today, the latest run is Today 23Z.
     
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    success_count = 0
+    const now = new Date();
+    const currentUtcHour = now.getUTCHours();
+    
+    let runDate = new Date(now);
+    // If it's before 23:00 UTC, we MUST show yesterday's data
+    if (currentUtcHour < 23) {
+        runDate.setUTCDate(runDate.getUTCDate() - 1);
+    }
+    
+    const yyyy = runDate.getUTCFullYear();
+    const mm = String(runDate.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(runDate.getUTCDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
+    const runHour = '23'; 
 
-    for fxx in range(1, FORECAST_HOURS + 1):
-        try:
-            H = Herbie(model_init_time, model="hrrr", product="sfc", fxx=fxx)
-            ds = H.xarray(":(TMP):2 m above ground")
-            t_sfc_f = (ds['t2m'] - 273.15) * 9/5 + 32
-            
-            # --- ALGORITHM ---
-            fog_mask = np.zeros_like(t_sfc_f)
-            fog_mask[t_sfc_f <= txover] = 1        # Mist
-            fog_mask[t_sfc_f <= (txover - 3.0)] = 2 # Dense Fog
-            
-            # --- PLOTTING ---
-            fig = plt.figure(figsize=(12, 10))
-            ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-            ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
-            
-            # Features
-            ax.add_feature(cfeature.COASTLINE, linewidth=1)
-            ax.add_feature(cfeature.BORDERS, linewidth=1)
-            ax.add_feature(cfeature.STATES, linewidth=0.8)
-            
-            if counties_feature:
-                ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3, alpha=0.5)
-            
-            # Colormap
-            from matplotlib.colors import ListedColormap
-            cmap = ListedColormap(['none', '#FFEB3B', '#8E24AA']) 
-            data_to_plot = np.ma.masked_where(fog_mask == 0, fog_mask)
-            
-            ax.pcolormesh(ds.longitude, ds.latitude, data_to_plot, 
-                               transform=ccrs.PlateCarree(), cmap=cmap, shading='auto')
-            
-            valid_time = model_init_time + timedelta(hours=fxx)
-            
-            plt.title(f"Crossover Fog Forecast\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=12, fontweight='bold')
-            plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=9, color='purple')
-            
-            filename = f"fog_{datetime.utcnow().strftime('%Y%m%d')}_23z_f{fxx:02d}.png"
-            save_path = os.path.join(OUTPUT_DIR, filename)
-            plt.savefig(save_path, bbox_inches='tight', dpi=100)
-            plt.close()
-            
-            if os.path.exists(save_path):
-                print(f"Generated {filename}")
-                success_count += 1
-            
-        except Exception as e:
-            print(f"Failed to generate frame {fxx}: {e}")
+    document.getElementById('run-info').textContent = `Run: ${dateStr} ${runHour}Z`;
 
-    if success_count == 0:
-        print("ERROR: 0 images were generated. Exiting.")
-        sys.exit(1)
+    // --- VIEW LOGIC ---
+    let currentView = 'forecast';
+    const timeline = document.getElementById('timeline');
+    const imgElement = document.getElementById('forecast-img');
+    const loader = document.getElementById('loader');
+    const errorMsg = document.getElementById('error-msg');
+    const btn = document.getElementById('download-btn');
+    let boxes = [];
 
-if __name__ == "__main__":
-    try:
-        # 1. Load Counties (Fail gracefully if server down)
-        counties_feat = get_counties_feature()
+    function toggleView(view) {
+        currentView = view;
+        errorMsg.style.display = 'none'; // Clear errors on toggle
+        
+        if (view === 'analysis') {
+            timeline.style.display = 'none';
+            // Force a random query param to bust cache (?v=...)
+            loadImage(`crossover_analysis.png?v=${new Date().getTime()}`);
+            document.getElementById('btn-analysis').style.fontWeight = 'bold';
+            document.getElementById('btn-analysis').style.borderColor = '#673AB7';
+            document.getElementById('btn-forecast').style.fontWeight = 'normal';
+            document.getElementById('btn-forecast').style.borderColor = '#ccc';
+            btn.style.display = 'none'; // Hide GIF button for static map
+        } else {
+            timeline.style.display = 'grid';
+            setImage(1); 
+            document.getElementById('btn-analysis').style.fontWeight = 'normal';
+            document.getElementById('btn-analysis').style.borderColor = '#ccc';
+            document.getElementById('btn-forecast').style.fontWeight = 'bold';
+            document.getElementById('btn-forecast').style.borderColor = '#673AB7';
+            btn.style.display = 'block';
+        }
+    }
 
-        # 2. Get Txover
-        txover_grid = get_crossover_temp()
+    // --- IMAGE LOADER ---
+    function setImage(fhr) {
+        const fhrStr = String(fhr).padStart(2, '0');
+        // Add cache buster ?v=... to force browser to load new image if it changed
+        const filename = `fog_${dateStr}_${runHour}z_f${fhrStr}.png?v=${new Date().getTime()}`;
+        loadImage(filename);
+
+        // Highlight timeline
+        boxes.forEach(b => b.classList.remove('active'));
+        const activeBox = document.getElementById(`box-${fhr}`);
+        if(activeBox) activeBox.classList.add('active');
+    }
+
+    function loadImage(filename) {
+        loader.style.display = 'flex';
+        imgElement.style.display = 'none';
+        errorMsg.style.display = 'none';
         
-        # 3. Get Sample Data (using SAFE time)
-        safe_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-        H_sample = Herbie(safe_time, model="hrrr", product="sfc", fxx=0)
-        ds_sample = H_sample.xarray(":(DPT):2 m above ground")
-        
-        # 4. Plot Analysis Map
-        plot_crossover_map(txover_grid, ds_sample, counties_feat)
-        
-        # 5. Run Forecast
-        process_forecast(txover_grid, counties_feat)
-        
-    except Exception as e:
-        print(f"Critical Error: {e}")
-        sys.exit(1)
+        imgElement.src = imageDir + filename;
+    }
+
+    imgElement.onload = function() { 
+        loader.style.display = 'none';
+        imgElement.style.display = 'block';
+    };
+
+    imgElement.onerror = function() {
+        loader.style.display = 'none';
+        imgElement.style.display = 'none';
+        errorMsg.style.display = 'flex';
+        document.getElementById('error-details').textContent = `File not found:\n${this.src.split('/').pop().split('?')[0]}`;
+    };
+
+    // --- BUILD TIMELINE ---
+    for (let i = 1; i <= totalHours; i++) {
+        let box = document.createElement('div');
+        box.className = 'time-box';
+        box.textContent = `+${i}h`;
+        box.id = `box-${i}`;
+        box.addEventListener('mouseenter', () => { if(currentView === 'forecast') setImage(i); });
+        box.addEventListener('click', () => { if(currentView === 'forecast') setImage(i); });
+        timeline.appendChild(box);
+        boxes.push(box);
+    }
+
+    // Initialize
+    setImage(1);
+
+    // --- GIF GENERATION ---
+    async function generateGIF() {
+        btn.disabled = true;
+        btn.textContent = "Processing...";
+        try {
+            const workerResponse = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+            const workerBlob = await workerResponse.blob();
+            const workerUrl = URL.createObjectURL(workerBlob);
+
+            const gif = new GIF({ workers: 2, quality: 10, workerScript: workerUrl, width: imgElement.naturalWidth, height: imgElement.naturalHeight });
+
+            for (let i = 1; i <= totalHours; i++) {
+                const fhrStr = String(i).padStart(2, '0');
+                const filename = `fog_${dateStr}_${runHour}z_f${fhrStr}.png`;
+                const img = new Image();
+                img.crossOrigin = "Anonymous";
+                await new Promise((resolve) => {
+                    img.onload = () => { gif.addFrame(img, {delay: 250}); resolve(); };
+                    img.onerror = () => { resolve(); }; // Skip missing frames
+                    img.src = imageDir + filename;
+                });
+            }
+            gif.on('finished', function(blob) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `fog_loop_${dateStr}.gif`;
+                link.click();
+                btn.textContent = "Download GIF";
+                btn.disabled = false;
+            });
+            gif.render();
+        } catch (e) {
+            console.error(e);
+            btn.textContent = "Error";
+            alert("GIF Error: " + e.message);
+        }
+    }
+</script>
+</body>
+</html>
