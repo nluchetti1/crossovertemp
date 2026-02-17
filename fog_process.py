@@ -13,7 +13,6 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-# Bounds for NC region
 EXTENT = [-81.5, -76.5, 33.8, 37.0] 
 
 CITIES = [
@@ -42,81 +41,68 @@ rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Cleanup old PNGs
-old_pngs = glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png"))
-for f in old_pngs:
-    if run_id not in f:
-        os.remove(f)
+# Cleanup
+for f in glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png")):
+    if run_id not in f: os.remove(f)
 
-# ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
-print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
+# ================= 1. FETCH RTMA CROSSOVER =================
+print(f"Fetching RTMA 21Z Threshold...")
 try:
     H_rtma = Herbie(rtma_time, model='rtma', product='anl')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
-    
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
-    # Save the analysis plot
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 78, 2)
-    cmap = plt.get_cmap('turbo', len(levels) - 1)
-    norm = mcolors.BoundaryNorm(levels, cmap.N)
-    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, 
-                          cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.8, ticks=levels[::2])
-    cbar.set_label('Threshold (RTMA 21Z Dewpoint) °F', fontweight='bold')
-    plt.title(f"Input Analysis: Derived Crossover Temp\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
+    norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
+    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
+    plt.colorbar(mesh, ax=ax, label='RTMA 21Z Crossover Threshold °F', shrink=0.8, ticks=levels[::2])
+    plt.title(f"Input Analysis: Crossover Threshold\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
-    print(f"RTMA Fetch Failed: {e}. Fallback to HRRR f00.")
+    print(f"RTMA Failed: {e}")
     H_fallback = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=0)
     ds_fallback = H_fallback.xarray(":(DPT):2 m")
     if isinstance(ds_fallback, list): ds_fallback = ds_fallback[0]
     crossover_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
 
-# ================= 2. GENERATE FORECAST LOOP =================
+# ================= 2. FORECAST LOOP =================
 gif_frames = []
+hourly_winds = {}
+
 for fxx in range(1, 19):
     try:
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
-        
-        if isinstance(ds_list, list):
-            ds_fcst = ds_list[0]
-            for extra_ds in ds_list[1:]:
-                ds_fcst = ds_fcst.merge(extra_ds, compat='override')
-        else:
-            ds_fcst = ds_list
+        ds_fcst = ds_list[0].merge(ds_list[1]) if isinstance(ds_list, list) else ds_list
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
+        # Fixed Interpolation
+        thresh_on_grid = crossover_f.interp(longitude=ds_fcst.longitude, latitude=ds_fcst.latitude, method='linear')
         
-        # --- FIXED INTERPOLATION LOGIC ---
-        # Instead of interp_like, we map RTMA values to HRRR Lat/Lon grid
-        thresh_on_grid = crossover_f.interp(
-            longitude=ds_fcst.longitude, 
-            latitude=ds_fcst.latitude, 
-            method='linear'
-        )
-        
-        u_var = 'u925' if 'u925' in ds_fcst else 'u'
-        v_var = 'v925' if 'v925' in ds_fcst else 'v'
+        u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
+        
+        # Calculate Regional Average 925mb Wind
+        avg_wind = float(wind_kt.mean().values)
+        hourly_winds[fxx] = round(avg_wind, 1)
 
         fog_mask = np.zeros_like(temp_f)
+        # Combo Technique: T <= Tx and Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
         add_map_features(ax)
-        cmap_fog = mcolors.ListedColormap(['none', 'gold', 'purple'])
+        cmap = mcolors.ListedColormap(['none', 'gold', 'purple'])
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
-                      transform=ccrs.PlateCarree(), cmap=cmap_fog, vmin=0, vmax=2)
+                      transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
         valid_time = hrrr_init_time + timedelta(hours=fxx)
-        plt.title(f"Combo Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z", loc='left', fontweight='bold')
+        plt.title(f"Combo Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z\nRegional Avg 925mb Wind: {hourly_winds[fxx]} kts", loc='left', fontweight='bold')
         ax.text(0.98, 1.05, "Dense (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
         ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
         
@@ -124,13 +110,10 @@ for fxx in range(1, 19):
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
-        print(f"✅ Hour {fxx} completed")
-    except Exception as e: 
-        print(f"❌ Forecast hour {fxx} failed: {e}")
+    except Exception as e: print(f"F{fxx} failed: {e}")
 
-if gif_frames:
-    imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
+if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", 
-               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC"), "avg_winds": hourly_winds}, f)
