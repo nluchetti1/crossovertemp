@@ -15,6 +15,7 @@ OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 EXTENT = [-81.5, -76.5, 33.8, 37.0] 
 
+# Target NC Airports
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -50,10 +51,11 @@ for f in old_pngs:
 # ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
 print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
 try:
-    # RTMA product must be 'anl' for analysis
+    # Fix: product must be 'anl' for RTMA analysis
     H_rtma = Herbie(rtma_time, model='rtma', product='anl')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     
+    # Handle list of datasets
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
     
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
@@ -80,26 +82,26 @@ gif_frames = []
 for fxx in range(1, 19):
     try:
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
-        # Search for Surface Temp and 925mb Winds
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         
-        # Handle list of datasets from cfgrib
+        # Fix: Merge datasets if cfgrib returns a list
         if isinstance(ds_list, list):
-            # Combine them or pick the one containing the variables
-            ds_fcst = ds_list[0].merge(ds_list[1])
+            ds_fcst = ds_list[0]
+            for extra_ds in ds_list[1:]:
+                ds_fcst = ds_fcst.merge(extra_ds, compat='override')
         else:
             ds_fcst = ds_list
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         thresh_on_grid = crossover_f.interp_like(temp_f)
         
-        # Wind variables might be named u, v or u925, v925 depending on GRIB parsing
+        # Correct variable access for 925mb winds
         u_var = 'u925' if 'u925' in ds_fcst else 'u'
         v_var = 'v925' if 'v925' in ds_fcst else 'v'
-        
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
+        # Combo Technique: Crossover Met + Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
