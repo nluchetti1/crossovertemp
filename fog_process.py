@@ -52,7 +52,6 @@ try:
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
     
-    # Coordinate naming fix for RTMA
     if 'nav_lon' in ds_rtma.coords:
         ds_rtma = ds_rtma.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
     
@@ -80,18 +79,11 @@ for fxx in range(1, 19):
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         ds_fcst = ds_list[0].merge(ds_list[1]) if isinstance(ds_list, list) else ds_list
         
-        # Coordinate naming fix for HRRR
         if 'nav_lon' in ds_fcst.coords:
             ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
-        
-        # INTERPOLATION: Explicitly use latitude/longitude coordinates
-        thresh_on_grid = crossover_f.interp(
-            longitude=ds_fcst.longitude, 
-            latitude=ds_fcst.latitude, 
-            method='linear'
-        )
+        thresh_on_grid = crossover_f.interp(longitude=ds_fcst.longitude, latitude=ds_fcst.latitude, method='linear')
         
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
@@ -99,6 +91,7 @@ for fxx in range(1, 19):
         hourly_winds[fxx] = round(avg_wind, 1)
 
         fog_mask = np.zeros_like(temp_f)
+        # Combo Logic: T <= Threshold AND 925mb Winds <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
