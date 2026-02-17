@@ -1,49 +1,33 @@
 name: Hourly Fog Update
-
 on:
   schedule:
     - cron: '15 23,0-10 * * *'
   workflow_dispatch:
-
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 # We only need the latest state
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
+          fetch-depth: 0
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy
-
       - name: Execute Fog Processing
         run: python fog_process.py
-
-      - name: Commit and Push Updates
+      - name: Commit and Force-Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Add all new/modified images and json
-          git add images/*.png images/*.json images/*.gif 2>/dev/null || true
-          
+          git add images/*
           if git diff --staged --quiet; then
-            echo "No changes to commit."
+            echo "No changes"
           else
-            git commit -m "Update Fog Maps: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            # Pull latest just to be safe, but use 'theirs' to resolve any conflict automatically
-            git pull origin main --strategy-option=theirs
+            git commit -m "Update Fog Dashboard"
+            git pull --rebase -X theirs origin main
             git push origin main
           fi
