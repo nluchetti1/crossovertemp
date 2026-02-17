@@ -21,7 +21,7 @@
     <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Updating dashboard...</div>
 
     <div class="controls">
-        <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
+        <button class="btn-alt" onclick="setMode('analysis')">View RTMA 21Z Threshold</button>
         <button onclick="setMode('forecast')">View Forecast Loop</button>
         <a href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
@@ -36,8 +36,8 @@
 
     <div class="note">
         <strong>Forecasting Logic:</strong><br>
-        1. <strong>Crossover:</strong> Triggered if HRRR Surface Temp &le; RTMA 21Z Min Dewpoint.<br>
-        2. <strong>Combo Filter:</strong> Forecast is suppressed if HRRR 925mb winds > 15 knots to reduce false alarms from boundary layer mixing.
+        1. <strong>Crossover:</strong> Predicted if HRRR Surface Temp &le; RTMA 21Z Min Dewpoint.<br>
+        2. <strong>Combo Filter:</strong> Forecast is suppressed if HRRR 925mb winds > 15 knots to reduce false alarms.
     </div>
 </div>
 
