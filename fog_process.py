@@ -19,9 +19,10 @@ import matplotlib.colors as mcolors
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Mid-Atlantic Zoom
-EXTENT = [-83, -75, 33.5, 40.5] 
+# Shifted Domain South to center North Carolina
+EXTENT = [-83, -75, 31.5, 38.5] 
 
+# Target NC Airports
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -34,24 +35,17 @@ def add_map_features(ax):
     ax.add_feature(cfeature.STATES, linewidth=0.8)
     ax.add_feature(cfeature.BORDERS, linestyle=':')
     
-    # County Boundaries
     counties = cfeature.NaturalEarthFeature(
         category='cultural', name='admin_2_counties',
         scale='10m', facecolor='none'
     )
     ax.add_feature(counties, edgecolor='gray', linewidth=0.3)
-    
-    for lon, lat, name in CITIES:
-        ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-        ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
-                fontsize=9, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
 
 # ================= 1. DYNAMIC PEAK HEATING LOGIC =================
 print("Calculating Crossover Temp at Peak Heating...")
 current_utc = datetime.utcnow()
 
 try:
-    # Anchor to 21Z for grid geometry
     ref_time = current_utc.replace(hour=21, minute=0, second=0, microsecond=0)
     if ref_time > current_utc: ref_time -= timedelta(days=1)
     
@@ -80,14 +74,32 @@ try:
     lat_rtma = ds_ref.latitude.values
 
     # Analysis Plot
-    fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+    fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
+    
     levels = np.arange(20, 78, 2)
-    norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
-    mesh = ax.pcolormesh(lon_rtma, lat_rtma, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
-    plt.colorbar(mesh, ax=ax, label='Crossover Temp (Max T Dewpoint) °F', shrink=0.8, ticks=levels[::2])
+    cmap = plt.get_cmap('turbo', len(levels) - 1)
+    norm = mcolors.BoundaryNorm(levels, cmap.N)
+    
+    mesh = ax.pcolormesh(lon_rtma, lat_rtma, crossover_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    
+    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.8, ticks=levels)
+    cbar.set_label('Crossover Temp (Max T Dewpoint) °F', fontweight='bold')
+    
+    # Add readout labels at each airport
+    for lon, lat, name in CITIES:
+        # Interpolate the specific max T and crossover values for this point
+        pt_max_t = griddata((lon_rtma.ravel(), lat_rtma.ravel()), max_t_grid.ravel(), (lon, lat), method='linear')
+        pt_xover = griddata((lon_rtma.ravel(), lat_rtma.ravel()), crossover_f.ravel(), (lon, lat), method='linear')
+        
+        ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
+        label_text = f"{name}\nMaxT: {pt_max_t:.0f}°\nCovr: {pt_xover:.0f}°"
+        ax.text(lon + 0.08, lat, label_text, transform=ccrs.PlateCarree(), 
+                fontsize=8, fontweight='bold', va='center',
+                bbox=dict(facecolor='white', alpha=0.85, edgecolor='black', pad=2))
+
     plt.title(f"Dynamic Crossover Threshold Analysis\nReference: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
-    plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
+    plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=130)
     plt.close()
 
 except Exception as e:
@@ -98,7 +110,6 @@ except Exception as e:
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# Flatten RTMA for griddata mapping
 rtma_points = np.array([lon_rtma.ravel(), lat_rtma.ravel()]).T
 rtma_values = crossover_f.ravel()
 
@@ -111,7 +122,6 @@ for fxx in range(1, 19):
         if 'nav_lon' in ds_fcst.coords: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
-        # Map RTMA to HRRR grid
         thresh_on_grid = griddata(rtma_points, rtma_values, (ds_fcst.longitude.values, ds_fcst.latitude.values), method='linear')
         
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
@@ -123,11 +133,16 @@ for fxx in range(1, 19):
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
         add_map_features(ax)
+        # Re-add basic airport names for the forecast loop
+        for lon, lat, name in CITIES:
+            ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
+            ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
+                    fontsize=9, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
+
         cmap = mcolors.ListedColormap(['none', 'gold', 'purple'])
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
                       transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
-        # Dynamic Zulu Titles
         zulu_str = (hrrr_init_time + timedelta(hours=fxx)).strftime('%HZ')
         plt.title(f"Crossover Fog Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {zulu_str}", 
                   loc='left', fontweight='bold', fontsize=12)
