@@ -22,33 +22,33 @@
 <body>
 <div class="wrapper">
     <h2>Crossover Fog Forecast Dashboard</h2>
-    <div class="info-bar" id="info-bar">Initializing...</div>
+    <div class="info-bar" id="info-bar">Initializing Dashboard...</div>
     <div class="controls">
         <button class="btn-alt" onclick="setMode('analysis')">View Peak Heating Crossover Map</button>
         <button onclick="setMode('forecast')">View Forecast Loop</button>
         <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
-    <img id="map-frame" src="" alt="Fog Map Content">
+    <img id="map-frame" src="" alt="Fog Forecast Map">
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 280px; display: inline-block;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 120px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
     <div class="logic-card">
         <strong>Combo Technique Implementation:</strong><br>
         1. <strong>Crossover Identification:</strong> Forecast triggers when the HRRR surface temperature ($T$) falls to or below the crossover temperature ($T_{xover}$), where $T_{xover}$ is the dew point recorded at the time of maximum daytime heating.<br>
         &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when $T \le T_{xover}$ (Visibility: 1-3 SM).<br>
-        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when $T \le T_{xover} - 3^\circ\text{F}$ (Visibility: &lt; 1/2 SM).<br>
+        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when $T \le T_{xover} - 3^\circ\text{F}$ (Visibility: < 1/2 SM).<br>
         2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if HRRR 925mb winds are &gt; 15 knots, as momentum mixing impedes fog formation.
     </div>
 </div>
 <script>
-    let runId = null, frame = 1, mode = 'forecast', winds = {};
+    let runId = null, frame = 1, mode = 'forecast';
     async function start() {
         const r = await fetch(`images/current_status.json?v=${Date.now()}`);
         const d = await r.json();
-        runId = d.run_id; winds = d.avg_winds;
-        document.getElementById('info-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+        runId = d.run_id;
+        document.getElementById('info-bar').innerText = `Forecast Init: ${d.model_init} | Updated: ${d.generated_at}`;
         setMode('forecast');
     }
     function setMode(m) {
@@ -64,8 +64,7 @@
     function update() {
         if (!runId || mode === 'analysis') return;
         document.getElementById('map-frame').src = `images/fog_${runId}_f${frame.toString().padStart(2, '0')}.png`;
-        const windVal = winds[frame] || '--';
-        document.getElementById('label').innerText = `Hour: +${frame} (Avg 925mb Wind: ${windVal} kt)`;
+        document.getElementById('label').innerText = `Hour: +${frame}`;
     }
     function changeFrame(d) {
         frame += d;
