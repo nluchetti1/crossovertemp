@@ -4,6 +4,7 @@ import cartopy.feature as cfeature
 import numpy as np
 import os
 import json
+import glob
 import imageio.v2 as imageio
 from datetime import datetime, timedelta
 from herbie import Herbie
@@ -14,7 +15,7 @@ OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 EXTENT = [-81.5, -76.5, 33.8, 37.0] 
 
-# Specific NC Airport List
+# Requested NC Airport List
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -32,7 +33,6 @@ def add_map_features(ax):
 
 # ================= DATE LOGIC =================
 current_utc = datetime.utcnow()
-# Determine the 21Z RTMA (peak heating) to use as the crossover source
 if current_utc.hour < 22:
     target_date = current_utc - timedelta(days=1)
 else:
@@ -42,6 +42,13 @@ rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
+# --- CLEANUP OLD IMAGES ---
+# Deletes old forecast PNGs to prevent repo bloat
+old_pngs = glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png"))
+for f in old_pngs:
+    if run_id not in f:
+        os.remove(f)
+
 # ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
 print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
 try:
@@ -49,19 +56,18 @@ try:
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
-    # Static Analysis Plot
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 76, 2)
     cmap = plt.get_cmap('turbo', len(levels) - 1)
     norm = mcolors.BoundaryNorm(levels, cmap.N)
     mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    plt.colorbar(mesh, ax=ax, label='RTMA 21Z Crossover Threshold °F', shrink=0.8)
-    plt.title(f"Threshold Analysis: 21Z Dewpoints\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
+    plt.colorbar(mesh, ax=ax, label='Threshold (RTMA 21Z Dewpoint) °F', shrink=0.8)
+    plt.title(f"Crossover Analysis: 21Z Dewpoints\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
-    print(f"RTMA Fetch Failed: {e}. Falling back to HRRR f00.")
+    print(f"RTMA Fetch Failed: {e}. Fallback to HRRR f00.")
     H_fallback = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=0)
     ds_fallback = H_fallback.xarray(":(DPT):2 m")
     crossover_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
@@ -76,12 +82,12 @@ for fxx in range(1, 19):
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         thresh_on_grid = crossover_f.interp_like(temp_f)
         
-        # Combo Technique: 925mb Winds <= 15kts filter
+        # Combo Filter: 925mb Winds <= 15kts
         u925, v925 = ds_fcst['u925'], ds_fcst['v925']
         wind_kt = np.sqrt(u925**2 + v925**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
-        # Apply Crossover Logic + Wind Filter (Combo Technique)
+        # Condition: Temp <= Crossover AND Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
@@ -106,4 +112,5 @@ if gif_frames:
     imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
-    json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+    json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", 
+               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
