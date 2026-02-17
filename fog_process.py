@@ -51,23 +51,28 @@ for f in old_pngs:
 # ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
 print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
 try:
-    # Fix: product must be 'anl' for RTMA analysis
     H_rtma = Herbie(rtma_time, model='rtma', product='anl')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
-    
-    # Handle list of datasets
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
     
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
-    levels = np.arange(20, 76, 2)
+    
+    # Precise 2-degree bins for the Analysis Plot
+    levels = np.arange(20, 78, 2)
     cmap = plt.get_cmap('turbo', len(levels) - 1)
     norm = mcolors.BoundaryNorm(levels, cmap.N)
-    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    plt.colorbar(mesh, ax=ax, label='Threshold (RTMA 21Z Dewpoint) °F', shrink=0.8)
-    plt.title(f"Crossover Analysis: 21Z Dewpoints\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
+    
+    mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, 
+                          cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    
+    # Create the "Stepped" Colorbar
+    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.8, ticks=levels[::2])
+    cbar.set_label('Crossover Threshold (RTMA 21Z Dewpoint) °F', fontweight='bold')
+    
+    plt.title(f"Input Analysis: Derived Crossover Temp\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
@@ -84,7 +89,6 @@ for fxx in range(1, 19):
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         
-        # Fix: Merge datasets if cfgrib returns a list
         if isinstance(ds_list, list):
             ds_fcst = ds_list[0]
             for extra_ds in ds_list[1:]:
@@ -95,13 +99,12 @@ for fxx in range(1, 19):
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         thresh_on_grid = crossover_f.interp_like(temp_f)
         
-        # Correct variable access for 925mb winds
         u_var = 'u925' if 'u925' in ds_fcst else 'u'
         v_var = 'v925' if 'v925' in ds_fcst else 'v'
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
-        # Combo Technique: Crossover Met + Wind <= 15kts
+        # Combo Logic: T <= Tx AND 925mb Winds <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
@@ -120,13 +123,10 @@ for fxx in range(1, 19):
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
-        print(f"✅ Hour {fxx} completed")
-    except Exception as e: 
-        print(f"❌ Forecast hour {fxx} failed: {e}")
+    except Exception as e: print(f"Forecast hour {fxx} failed: {e}")
 
 if gif_frames:
     imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
-    json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", 
-               "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+    json.dump({"run_id": run_id, "model_init": f"{hrrr_init_time.strftime('%H')}Z", "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
