@@ -2,99 +2,111 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crossover Fog Forecast</title>
+    <title>NC Crossover Fog Dashboard</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; background-color: #f0f2f5; margin: 0; padding: 20px; }
-        h2 { color: #333; margin-bottom: 5px; }
-        .header-info { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; margin-bottom: 20px; }
-        .controls button { background-color: #533b8f; color: white; border: none; padding: 10px 20px; margin: 5px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
-        .controls button:hover { background-color: #3e2a6e; }
-        .controls button:active { transform: translateY(1px); }
-        #map-container { position: relative; max-width: 1000px; margin: 0 auto; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        img { width: 100%; height: auto; border-radius: 4px; }
-        #status-msg { font-size: 0.9em; color: #666; margin-top: 5px; }
-        .loading { opacity: 0.5; }
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; color: #333; }
+        .wrapper { max-width: 1050px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
+        .status-box { background: #f1f3f5; padding: 10px; border-radius: 6px; font-size: 0.85em; margin-bottom: 20px; color: #495057; }
+        .btn-group { margin-bottom: 20px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+        .btn-primary { background: #5d469f; color: white; }
+        .btn-primary:hover { background: #483582; }
+        .btn-secondary { background: #495057; color: white; }
+        .btn-download { background: #2b8a3e; color: white; text-decoration: none; padding: 12px 20px; border-radius: 6px; display: inline-block; font-size: 13.3px; }
+        #map-display img { width: 100%; border-radius: 8px; border: 1px solid #dee2e6; }
+        .nav-controls { margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 10px; border: 1px solid #e9ecef; }
     </style>
 </head>
 <body>
 
-    <div class="header-info">
-        <h2>Crossover Fog Forecast</h2>
-        <div id="status-msg">Initializing...</div>
+<div class="wrapper">
+    <h2 style="margin-top:0;">Crossover Fog Forecast</h2>
+    <div class="status-box" id="status-text">Synchronizing with latest HRRR run...</div>
+
+    <div class="btn-group">
+        <button class="btn-secondary" onclick="viewAnalysis()">View Precision Analysis</button>
+        <button class="btn-primary" onclick="viewForecast()">View Forecast Loop</button>
+        <a href="images/fog_animation.gif" download class="btn-download">Download Animation</a>
     </div>
 
-    <div class="controls">
-        <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <button onclick="toggleLoop()" id="loop-btn">Start Loop</button>
-        <button onclick="changeFrame(1)">Next &#8594;</button>
+    <div id="map-display">
+        <img id="active-map" src="" alt="Fog Map Content">
     </div>
 
-    <div id="map-container">
-        <img id="forecast-img" src="" alt="Loading Forecast Map...">
+    <div class="nav-controls" id="nav-group">
+        <button onclick="changeFrame(-1)">&#8592; Previous Hour</button>
+        <span id="frame-label" style="margin: 0 25px; font-weight: bold; min-width: 150px; display: inline-block;">Hour: --</span>
+        <button onclick="changeFrame(1)">Next Hour &#8594;</button>
+        <button id="loop-toggle" onclick="togglePlay()" style="margin-left: 20px; background: #1971c2; color: white;">Play Loop</button>
     </div>
+</div>
 
-    <script>
-        let currentRunId = null;
-        let currentFrame = 1;
-        const maxFrames = 18;
-        let loopInterval = null;
+<script>
+    let currentId = null;
+    let currentHour = 1;
+    let loopTimer = null;
+    let inAnalysis = false;
 
-        // Load the JSON Status file first
-        async function loadStatus() {
-            try {
-                // Add a timestamp to prevent browser caching of the JSON file
-                const response = await fetch(`images/current_status.json?t=${new Date().getTime()}`);
-                if (!response.ok) throw new Error("Status file not found");
-                
-                const data = await response.json();
-                currentRunId = data.run_id;
-                
-                document.getElementById('status-msg').innerHTML = 
-                    `<strong>Run:</strong> ${data.model_init} (Init) | <strong>Updated:</strong> ${data.generated_at}`;
-                
-                updateImage();
-            } catch (error) {
-                console.error(error);
-                document.getElementById('status-msg').innerText = "System Offline or Updating...";
-                document.getElementById('forecast-img').alt = "Map Unavailable";
-            }
+    async function loadData() {
+        try {
+            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+            const d = await r.json();
+            currentId = d.run_id;
+            document.getElementById('status-text').innerText = `Model: ${d.model_init} | Last Update: ${d.generated_at}`;
+            viewForecast();
+        } catch (err) {
+            document.getElementById('status-text').innerText = "Update in progress or data unavailable.";
         }
+    }
 
-        function updateImage() {
-            if (!currentRunId) return;
+    function refreshMap() {
+        if (!currentId || inAnalysis) return;
+        const f = currentHour.toString().padStart(2, '0');
+        document.getElementById('active-map').src = `images/fog_${currentId}_f${f}.png`;
+        document.getElementById('frame-label').innerText = `Forecast Hour: +${currentHour}`;
+    }
 
-            const img = document.getElementById('forecast-img');
-            const frameStr = currentFrame.toString().padStart(2, '0');
-            // Construct the URL based on the JSON run_id
-            const url = `images/fog_${currentRunId}_f${frameStr}.png`;
-            
-            img.src = url;
+    function viewAnalysis() {
+        stopPlay();
+        inAnalysis = true;
+        document.getElementById('active-map').src = 'images/crossover_analysis.png';
+        document.getElementById('frame-label').innerText = "Historical Analysis View";
+        document.getElementById('nav-group').style.opacity = "0.4";
+    }
+
+    function viewForecast() {
+        inAnalysis = false;
+        document.getElementById('nav-group').style.opacity = "1";
+        refreshMap();
+    }
+
+    function changeFrame(delta) {
+        if (inAnalysis) viewForecast();
+        currentHour += delta;
+        if (currentHour > 18) currentHour = 1;
+        if (currentHour < 1) currentHour = 18;
+        refreshMap();
+    }
+
+    function togglePlay() {
+        if (inAnalysis) viewForecast();
+        if (loopTimer) { stopPlay(); } 
+        else {
+            loopTimer = setInterval(() => changeFrame(1), 650);
+            document.getElementById('loop-toggle').innerText = "Stop Loop";
+            document.getElementById('loop-toggle').style.background = "#fa5252";
         }
+    }
 
-        function changeFrame(step) {
-            currentFrame += step;
-            if (currentFrame > maxFrames) currentFrame = 1;
-            if (currentFrame < 1) currentFrame = maxFrames;
-            updateImage();
-        }
+    function stopPlay() {
+        clearInterval(loopTimer);
+        loopTimer = null;
+        document.getElementById('loop-toggle').innerText = "Play Loop";
+        document.getElementById('loop-toggle').style.background = "#1971c2";
+    }
 
-        function toggleLoop() {
-            const btn = document.getElementById('loop-btn');
-            if (loopInterval) {
-                clearInterval(loopInterval);
-                loopInterval = null;
-                btn.innerText = "Start Loop";
-                btn.style.backgroundColor = "#533b8f";
-            } else {
-                loopInterval = setInterval(() => changeFrame(1), 500);
-                btn.innerText = "Stop Loop";
-                btn.style.backgroundColor = "#d9534f";
-            }
-        }
+    loadData();
+</script>
 
-        // Initialize
-        loadStatus();
-    </script>
 </body>
 </html>
