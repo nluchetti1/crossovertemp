@@ -12,53 +12,40 @@
         .btn-alt { background: #495057; }
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
+        .info-bar { font-size: 0.9em; margin-bottom: 10px; color: #444; background: #e9ecef; padding: 10px; border-radius: 6px; }
         .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
     </style>
 </head>
 <body>
-
 <div class="wrapper">
-    <h2 style="margin-bottom:5px;">NC Fog Forecast Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Fetching Latest Data...</div>
-
+    <h2>NC Fog Forecast: Combo Technique</h2>
+    <div class="info-bar" id="info-bar">Initializing...</div>
     <div class="controls">
         <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
         <button onclick="setMode('forecast')">View Forecast Loop</button>
         <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
     </div>
-
     <img id="map-frame" src="" alt="Fog Map Content">
-
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
         <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
-
     <div class="logic-card">
         <strong>Combo Technique Implementation:</strong><br>
-        1. <strong>Crossover:</strong> Triggered if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
+        1. <strong>Crossover:</strong> Predicted if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
         2. <strong>Stability Filter:</strong> Forecast is suppressed if HRRR 925mb winds &gt; 15 knots (prevents false alarms from boundary layer mixing).
     </div>
 </div>
-
 <script>
-    let runId = null;
-    let frame = 1;
-    let mode = 'forecast';
-    let winds = {};
-
+    let runId = null, frame = 1, mode = 'forecast', winds = {};
     async function start() {
-        try {
-            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
-            const d = await r.json();
-            runId = d.run_id;
-            winds = d.avg_winds;
-            document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
-            setMode('forecast');
-        } catch(e) { document.getElementById('status-bar').innerText = "Data pending update..."; }
+        const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+        const d = await r.json();
+        runId = d.run_id; winds = d.avg_winds;
+        document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+        setMode('forecast');
     }
-
     function setMode(m) {
         mode = m;
         if (mode === 'analysis') {
@@ -69,22 +56,17 @@
             update();
         }
     }
-
     function update() {
         if (!runId || mode === 'analysis') return;
-        const f = frame.toString().padStart(2, '0');
-        document.getElementById('map-frame').src = `images/fog_${runId}_f${f}.png`;
+        document.getElementById('map-frame').src = `images/fog_${runId}_f${frame.toString().padStart(2, '0')}.png`;
         const windVal = winds[frame] || '--';
         document.getElementById('label').innerText = `Hour: +${frame} (Avg Wind: ${windVal} kt)`;
     }
-
     function changeFrame(d) {
         frame += d;
-        if (frame > 18) frame = 1;
-        if (frame < 1) frame = 18;
+        if (frame > 18) frame = 1; if (frame < 1) frame = 18;
         update();
     }
-
     start();
 </script>
 </body>
