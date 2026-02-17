@@ -7,54 +7,37 @@
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
         .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; }
-        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; transition: 0.2s; }
-        button:hover { background: #483582; }
-        .btn-alt { background: #495057; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; }
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
-        .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
+        .info-bar { font-size: 0.9em; margin-bottom: 10px; color: #444; background: #e9ecef; padding: 10px; border-radius: 6px; }
     </style>
 </head>
 <body>
-
 <div class="wrapper">
-    <h2 style="margin-bottom:5px;">NC Fog Forecast Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Fetching Latest Data...</div>
-
+    <h2>NC Fog Forecast: Combo Technique</h2>
+    <div class="info-bar" id="info-bar">Initializing...</div>
     <div class="controls">
-        <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
-        <button onclick="setMode('forecast')">View Forecast Loop</button>
-        <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
+        <button style="background:#495057" onclick="setMode('analysis')">21Z RTMA Threshold</button>
+        <button onclick="setMode('forecast')">Forecast Loop</button>
+        <a href="images/fog_animation.gif" download><button style="background:#2b8a3e">Download GIF</button></a>
     </div>
-
-    <img id="map-frame" src="" alt="Fog Map Content">
-
+    <img id="map-frame" src="" alt="Fog Map">
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 150px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
-
-    <div class="logic-card">
-        <strong>Combo Technique Implementation:</strong><br>
-        1. <strong>Crossover:</strong> Triggered if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
-        2. <strong>Stability Filter:</strong> Forecast is suppressed if HRRR 925mb winds &gt; 15 knots, as momentum mixing impedes fog formation.
-    </div>
 </div>
-
 <script>
-    let runId = null;
-    let frame = 1;
-    let mode = 'forecast';
-
+    let runId, frame = 1, mode = 'forecast', winds = {};
     async function start() {
         const r = await fetch(`images/current_status.json?v=${Date.now()}`);
         const d = await r.json();
-        runId = d.run_id;
-        document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+        runId = d.run_id; winds = d.avg_winds;
+        document.getElementById('info-bar').innerHTML = `<b>Init:</b> ${d.model_init} | <b>Updated:</b> ${d.generated_at}`;
         setMode('forecast');
     }
-
     function setMode(m) {
         mode = m;
         if (mode === 'analysis') {
@@ -65,21 +48,17 @@
             update();
         }
     }
-
     function update() {
         if (!runId || mode === 'analysis') return;
-        const f = frame.toString().padStart(2, '0');
-        document.getElementById('map-frame').src = `images/fog_${runId}_f${f}.png`;
-        document.getElementById('label').innerText = `Forecast Hour: +${frame}`;
+        document.getElementById('map-frame').src = `images/fog_${runId}_f${frame.toString().padStart(2, '0')}.png`;
+        const windVal = winds[frame] || '--';
+        document.getElementById('label').innerText = `Hour: +${frame} (Avg Wind: ${windVal} kt)`;
     }
-
     function changeFrame(d) {
         frame += d;
-        if (frame > 18) frame = 1;
-        if (frame < 1) frame = 18;
+        if (frame > 18) frame = 1; if (frame < 1) frame = 18;
         update();
     }
-
     start();
 </script>
 </body>
