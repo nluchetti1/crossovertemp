@@ -15,7 +15,6 @@ OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 EXTENT = [-81.5, -76.5, 33.8, 37.0] 
 
-# Requested NC Airport List
 CITIES = [
     [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
     [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
@@ -42,8 +41,7 @@ rtma_time = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
 hrrr_init_time = (current_utc - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init_time.strftime("%Y%m%d_%Hz")
 
-# --- CLEANUP OLD IMAGES ---
-# Deletes old forecast PNGs to prevent repo bloat
+# Cleanup old PNGs
 old_pngs = glob.glob(os.path.join(OUTPUT_DIR, "fog_*.png"))
 for f in old_pngs:
     if run_id not in f:
@@ -52,8 +50,12 @@ for f in old_pngs:
 # ================= 1. FETCH RTMA CROSSOVER THRESHOLD =================
 print(f"Fetching RTMA 21Z Threshold for {rtma_time}...")
 try:
-    H_rtma = Herbie(rtma_time, model='rtma', product='sfc')
+    # RTMA product must be 'anl' for analysis
+    H_rtma = Herbie(rtma_time, model='rtma', product='anl')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
+    
+    if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
+    
     crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -70,6 +72,7 @@ except Exception as e:
     print(f"RTMA Fetch Failed: {e}. Fallback to HRRR f00.")
     H_fallback = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=0)
     ds_fallback = H_fallback.xarray(":(DPT):2 m")
+    if isinstance(ds_fallback, list): ds_fallback = ds_fallback[0]
     crossover_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
 
 # ================= 2. GENERATE FORECAST LOOP =================
@@ -77,17 +80,26 @@ gif_frames = []
 for fxx in range(1, 19):
     try:
         H_fcst = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=fxx)
-        ds_fcst = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
+        # Search for Surface Temp and 925mb Winds
+        ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
+        
+        # Handle list of datasets from cfgrib
+        if isinstance(ds_list, list):
+            # Combine them or pick the one containing the variables
+            ds_fcst = ds_list[0].merge(ds_list[1])
+        else:
+            ds_fcst = ds_list
         
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
         thresh_on_grid = crossover_f.interp_like(temp_f)
         
-        # Combo Filter: 925mb Winds <= 15kts
-        u925, v925 = ds_fcst['u925'], ds_fcst['v925']
-        wind_kt = np.sqrt(u925**2 + v925**2) * 1.94384
+        # Wind variables might be named u, v or u925, v925 depending on GRIB parsing
+        u_var = 'u925' if 'u925' in ds_fcst else 'u'
+        v_var = 'v925' if 'v925' in ds_fcst else 'v'
+        
+        wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
 
         fog_mask = np.zeros_like(temp_f)
-        # Condition: Temp <= Crossover AND Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
@@ -106,7 +118,9 @@ for fxx in range(1, 19):
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
-    except Exception as e: print(f"Forecast hour {fxx} failed: {e}")
+        print(f"✅ Hour {fxx} completed")
+    except Exception as e: 
+        print(f"❌ Forecast hour {fxx} failed: {e}")
 
 if gif_frames:
     imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
