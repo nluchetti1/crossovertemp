@@ -51,23 +51,25 @@ try:
     H_rtma = Herbie(rtma_time, model='rtma', product='anl')
     ds_rtma = H_rtma.xarray(":(DPT):2 m")
     if isinstance(ds_rtma, list): ds_rtma = ds_rtma[0]
-    crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
     
+    # Ensure coordinates are named correctly for interpolation
+    if 'nav_lon' in ds_rtma: ds_rtma = ds_rtma.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+    
+    crossover_f = (ds_rtma['d2m'] - 273.15) * 9/5 + 32
+    # Create a 2D interpolator for the threshold
+    crossover_f = crossover_f.set_coords(['longitude', 'latitude'])
+
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
     levels = np.arange(20, 78, 2)
     norm = mcolors.BoundaryNorm(levels, plt.get_cmap('turbo').N)
     mesh = ax.pcolormesh(ds_rtma.longitude, ds_rtma.latitude, crossover_f, cmap='turbo', norm=norm, transform=ccrs.PlateCarree())
     plt.colorbar(mesh, ax=ax, label='RTMA 21Z Crossover Threshold °F', shrink=0.8, ticks=levels[::2])
-    plt.title(f"Input Analysis: Crossover Threshold\nRef: {rtma_time.strftime('%Y-%m-%d %H')}Z", loc='left', fontweight='bold')
     plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=120)
     plt.close()
 except Exception as e:
     print(f"RTMA Failed: {e}")
-    H_fallback = Herbie(hrrr_init_time, model='hrrr', product='sfc', fxx=0)
-    ds_fallback = H_fallback.xarray(":(DPT):2 m")
-    if isinstance(ds_fallback, list): ds_fallback = ds_fallback[0]
-    crossover_f = (ds_fallback['d2m'] - 273.15) * 9/5 + 32
+    exit(1)
 
 # ================= 2. FORECAST LOOP =================
 gif_frames = []
@@ -79,19 +81,24 @@ for fxx in range(1, 19):
         ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
         ds_fcst = ds_list[0].merge(ds_list[1]) if isinstance(ds_list, list) else ds_list
         
+        # Mapping HRRR coords
+        if 'nav_lon' in ds_fcst: ds_fcst = ds_fcst.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+        
         temp_f = (ds_fcst['t2m'] - 273.15) * 9/5 + 32
-        # Fixed Interpolation
-        thresh_on_grid = crossover_f.interp(longitude=ds_fcst.longitude, latitude=ds_fcst.latitude, method='linear')
+        
+        # INTERPOLATION FIX: Match RTMA to HRRR grid using lat/lon values
+        thresh_on_grid = crossover_f.interp(
+            longitude=ds_fcst.longitude, 
+            latitude=ds_fcst.latitude, 
+            method='linear'
+        )
         
         u_var, v_var = ('u925', 'v925') if 'u925' in ds_fcst else ('u', 'v')
         wind_kt = np.sqrt(ds_fcst[u_var]**2 + ds_fcst[v_var]**2) * 1.94384
-        
-        # Calculate Regional Average 925mb Wind
         avg_wind = float(wind_kt.mean().values)
         hourly_winds[fxx] = round(avg_wind, 1)
 
         fog_mask = np.zeros_like(temp_f)
-        # Combo Technique: T <= Tx and Wind <= 15kts
         fog_mask[(temp_f <= thresh_on_grid) & (wind_kt <= 15.0)] = 1
         fog_mask[(temp_f <= (thresh_on_grid - 3.0)) & (wind_kt <= 15.0)] = 2
 
@@ -101,15 +108,13 @@ for fxx in range(1, 19):
         ax.pcolormesh(ds_fcst.longitude, ds_fcst.latitude, np.ma.masked_where(fog_mask == 0, fog_mask), 
                       transform=ccrs.PlateCarree(), cmap=cmap, vmin=0, vmax=2)
 
-        valid_time = hrrr_init_time + timedelta(hours=fxx)
-        plt.title(f"Combo Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z\nRegional Avg 925mb Wind: {hourly_winds[fxx]} kts", loc='left', fontweight='bold')
-        ax.text(0.98, 1.05, "Dense (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
-        ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
+        plt.title(f"Combo Forecast | Init: {hrrr_init_time.strftime('%H')}Z | Valid: +{fxx}h\nAvg 925mb Wind: {hourly_winds[fxx]} kt", loc='left', fontweight='bold')
         
         fname = os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png")
         plt.savefig(fname, bbox_inches='tight', dpi=100)
         gif_frames.append(imageio.imread(fname))
         plt.close()
+        print(f"✅ F{fxx} done")
     except Exception as e: print(f"F{fxx} failed: {e}")
 
 if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
