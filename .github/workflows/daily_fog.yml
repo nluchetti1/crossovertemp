@@ -1,0 +1,42 @@
+name: Daily Fog Forecast
+
+on:
+  schedule:
+    # Runs at 23:00 UTC daily (approx 6 PM EST)
+    - cron: '0 23 * * *'
+  workflow_dispatch: # Allows you to click "Run Now" manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libeccodes0
+
+    - name: Install Python Libraries
+      run: |
+        pip install xarray cfgrib matplotlib cartopy numpy pandas herbie-data
+
+    - name: Run Fog Processing Script
+      run: python fog_process.py
+
+    - name: Commit and Push Images
+      run: |
+        git config --global user.name "GitHub Action"
+        git config --global user.email "action@github.com"
+        git add images/*.png
+        git commit -m "Update Fog Forecast Maps" || echo "No changes to commit"
+        git push
