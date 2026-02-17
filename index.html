@@ -11,16 +11,12 @@
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
         .info-bar { font-size: 0.9em; margin-bottom: 10px; color: #444; background: #e9ecef; padding: 10px; border-radius: 6px; }
-        #risk-alert { display: inline-block; padding: 5px 15px; border-radius: 20px; font-weight: bold; margin-top: 10px; }
-        .low-risk { background: #d4edda; color: #155724; }
-        .high-risk { background: #f8d7da; color: #721c24; border: 2px solid #dc3545; }
     </style>
 </head>
 <body>
 <div class="wrapper">
     <h2>NC Fog Forecast: Combo Technique</h2>
     <div class="info-bar" id="info-bar">Initializing...</div>
-    <div id="risk-alert" class="low-risk">Fog Risk: Nominal</div>
     <div class="controls">
         <button style="background:#495057" onclick="setMode('analysis')">21Z RTMA Threshold</button>
         <button onclick="setMode('forecast')">Forecast Loop</button>
@@ -49,10 +45,8 @@
         if (mode === 'analysis') {
             document.getElementById('map-frame').src = 'images/crossover_analysis.png';
             document.getElementById('nav-ui').style.visibility = 'hidden';
-            document.getElementById('risk-alert').style.display = 'none';
         } else {
             document.getElementById('nav-ui').style.visibility = 'visible';
-            document.getElementById('risk-alert').style.display = 'inline-block';
             update();
         }
     }
@@ -61,14 +55,6 @@
         document.getElementById('map-frame').src = `images/fog_${runId}_f${frame.toString().padStart(2, '0')}.png`;
         const windVal = winds[frame] || '--';
         document.getElementById('label').innerText = `Hour: +${frame} (Avg Wind: ${windVal} kt)`;
-        const alert = document.getElementById('risk-alert');
-        if (parseFloat(windVal) < 8) {
-            alert.innerText = "Fog Risk: ELEVATED (Low Winds)";
-            alert.className = "high-risk";
-        } else {
-            alert.innerText = "Fog Risk: Nominal";
-            alert.className = "low-risk";
-        }
     }
     function changeFrame(d) {
         frame += d;
