@@ -2,9 +2,9 @@ name: Daily Fog Forecast
 
 on:
   schedule:
-    # Runs at 23:00 UTC daily (approx 6 PM EST)
+    # Runs at 23:00 UTC (6:00 PM EST)
     - cron: '0 23 * * *'
-  workflow_dispatch: # Allows you to click "Run Now" manually
+  workflow_dispatch: # Allows manual run button
 
 jobs:
   build:
@@ -19,7 +19,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.10'
 
     - name: Install System Dependencies
       run: |
@@ -28,12 +28,12 @@ jobs:
 
     - name: Install Python Libraries
       run: |
-        pip install xarray cfgrib matplotlib cartopy numpy pandas herbie-data
+        pip install -r requirements.txt
 
-    - name: Run Fog Processing Script
+    - name: Run Fog Model
       run: python fog_process.py
 
-    - name: Commit and Push Images
+    - name: Commit and Push Maps
       run: |
         git config --global user.name "GitHub Action"
         git config --global user.email "action@github.com"
