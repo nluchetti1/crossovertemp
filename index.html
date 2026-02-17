@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NC Combo Fog Dashboard</title>
+    <title>Crossover Fog Dashboard</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
-        .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .wrapper { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; }
         button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; transition: 0.2s; }
         button:hover { background: #483582; }
@@ -14,11 +14,14 @@
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
         .info-bar { font-size: 0.9em; margin-bottom: 10px; color: #444; background: #e9ecef; padding: 10px; border-radius: 6px; }
         .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
+        .color-key { font-weight: bold; }
+        .yellow { color: #b8860b; }
+        .purple { color: #800080; }
     </style>
 </head>
 <body>
 <div class="wrapper">
-    <h2>NC Fog Forecast: Combo Technique</h2>
+    <h2>Crossover Fog Forecast Dashboard</h2>
     <div class="info-bar" id="info-bar">Initializing...</div>
     <div class="controls">
         <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
@@ -28,13 +31,15 @@
     <img id="map-frame" src="" alt="Fog Map Content">
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 220px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
     <div class="logic-card">
         <strong>Combo Technique Implementation:</strong><br>
-        1. <strong>Crossover:</strong> Predicted if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
-        2. <strong>Stability Filter:</strong> Forecast is suppressed if HRRR 925mb winds &gt; 15 knots (prevents false alarms from boundary layer mixing).
+        1. <strong>Crossover Identification:</strong> Forecast triggers when the HRRR surface temperature ($T$) falls to or below the crossover temperature ($T_{xover}$), where $T_{xover}$ is defined as the RTMA 21Z afternoon minimum dewpoint.<br>
+        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when $T \le T_{xover}$ (Visibility: 1-3 SM).<br>
+        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when $T \le T_{xover} - 3^\circ\text{F}$ (Visibility: < 1/2 SM).<br>
+        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if HRRR 925mb winds are &gt; 15 knots, as momentum mixing impedes fog formation.
     </div>
 </div>
 <script>
@@ -43,7 +48,7 @@
         const r = await fetch(`images/current_status.json?v=${Date.now()}`);
         const d = await r.json();
         runId = d.run_id; winds = d.avg_winds;
-        document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+        document.getElementById('info-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
         setMode('forecast');
     }
     function setMode(m) {
