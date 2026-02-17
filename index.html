@@ -1,38 +1,91 @@
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F12 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf12.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F12 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F13 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf13.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-/opt/hostedtoolcache/Python/3.10.19/x64/lib/python3.10/site-packages/herbie/core.py:978: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
-  logic = df.search_this.str.contains(search)
-/opt/hostedtoolcache/Python/3.10.19/x64/lib/python3.10/site-packages/herbie/core.py:978: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
-  logic = df.search_this.str.contains(search)
-/opt/hostedtoolcache/Python/3.10.19/x64/lib/python3.10/site-packages/herbie/core.py:978: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
-  logic = df.search_this.str.contains(search)
-/opt/hostedtoolcache/Python/3.10.19/x64/lib/python3.10/site-packages/herbie/core.py:978: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
-  logic = df.search_this.str.contains(search)
-/opt/hostedtoolcache/Python/3.10.19/x64/lib/python3.10/site-packages/herbie/core.py:978: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
-  logic = df.search_this.str.contains(search)
-F13 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F14 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf14.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F14 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F15 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf15.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F15 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F16 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf16.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F16 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F17 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf17.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F17 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
-✅ Found ┊ model=hrrr ┊ product=sfc ┊ 2026-Feb-17 04:00 UTC F18 ┊ GRIB2 @ aws ┊ IDX @ aws
-Downloading inventory file from self.idx='https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20260217/conus/hrrr.t04z.wrfsfcf18.grib2.idx'
-Note: Returning a list of [2] xarray.Datasets because cfgrib opened with multiple hypercubes.
-F18 failed: Dimensions {'latitude', 'longitude'} do not exist. Expected one or more of FrozenMappingWarningOnValuesAccess({'y': 1597, 'x': 2345})
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NC Combo Fog Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
+        .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #5d469f; color: white; transition: 0.2s; }
+        button:hover { background: #483582; }
+        .btn-alt { background: #495057; }
+        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+        .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
+        .logic-card { text-align: left; font-size: 0.85em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 15px; margin-top: 20px; color: #444; }
+    </style>
+</head>
+<body>
+
+<div class="wrapper">
+    <h2 style="margin-bottom:5px;">NC Fog Forecast Dashboard</h2>
+    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 20px;">Fetching Latest Data...</div>
+
+    <div class="controls">
+        <button class="btn-alt" onclick="setMode('analysis')">View 21Z RTMA Threshold</button>
+        <button onclick="setMode('forecast')">View Forecast Loop</button>
+        <a id="gif-link" href="images/fog_animation.gif" download><button style="background: #2b8a3e;">Download GIF</button></a>
+    </div>
+
+    <img id="map-frame" src="" alt="Fog Map Content">
+
+    <div class="nav" id="nav-ui">
+        <button onclick="changeFrame(-1)">&#8592; Prev</button>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 140px; display: inline-block;">Hour: --</span>
+        <button onclick="changeFrame(1)">Next &#8594;</button>
+    </div>
+
+    <div class="logic-card">
+        <strong>Combo Technique Implementation:</strong><br>
+        1. <strong>Crossover:</strong> Triggered if HRRR Surface Temp &le; RTMA 21Z Afternoon Min Dewpoint.<br>
+        2. <strong>Stability Filter:</strong> Forecast is suppressed if HRRR 925mb winds &gt; 15 knots (prevents false alarms from boundary layer mixing).
+    </div>
+</div>
+
+<script>
+    let runId = null;
+    let frame = 1;
+    let mode = 'forecast';
+    let winds = {};
+
+    async function start() {
+        try {
+            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+            const d = await r.json();
+            runId = d.run_id;
+            winds = d.avg_winds;
+            document.getElementById('status-bar').innerText = `Forecast Init: ${d.model_init} | Last Update: ${d.generated_at}`;
+            setMode('forecast');
+        } catch(e) { document.getElementById('status-bar').innerText = "Data pending update..."; }
+    }
+
+    function setMode(m) {
+        mode = m;
+        if (mode === 'analysis') {
+            document.getElementById('map-frame').src = 'images/crossover_analysis.png';
+            document.getElementById('nav-ui').style.visibility = 'hidden';
+        } else {
+            document.getElementById('nav-ui').style.visibility = 'visible';
+            update();
+        }
+    }
+
+    function update() {
+        if (!runId || mode === 'analysis') return;
+        const f = frame.toString().padStart(2, '0');
+        document.getElementById('map-frame').src = `images/fog_${runId}_f${f}.png`;
+        const windVal = winds[frame] || '--';
+        document.getElementById('label').innerText = `Hour: +${frame} (Avg Wind: ${windVal} kt)`;
+    }
+
+    function changeFrame(d) {
+        frame += d;
+        if (frame > 18) frame = 1;
+        if (frame < 1) frame = 18;
+        update();
+    }
+
+    start();
+</script>
+</body>
+</html>
