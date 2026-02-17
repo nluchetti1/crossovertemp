@@ -1,42 +1,53 @@
-name: Daily Fog Forecast
+name: Hourly Fog Update
 
 on:
   schedule:
-    # Runs at 23:00 UTC (6:00 PM EST)
-    - cron: '0 23 * * *'
-  workflow_dispatch: # Allows manual run button
+    # 6 PM EST = 23:00 UTC
+    # 5 AM EST = 10:00 UTC
+    # This runs at minute 15 of every hour from 23Z through 10Z
+    - cron: '15 23,0-10 * * *'
+  
+  # Allows you to trigger the script manually from the GitHub 'Actions' tab
+  workflow_dispatch:
 
 jobs:
-  build:
+  run-forecast:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write  # Crucial for the action to push images back to your repo
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Speeds up subsequent runs
 
-    - name: Install System Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libeccodes0
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Herbie handles the HRRR data downloads efficiently
+          pip install matplotlib cartopy netCDF4 xarray herbie-data 
 
-    - name: Install Python Libraries
-      run: |
-        pip install -r requirements.txt
+      - name: Execute Fog Processing
+        run: python fog_process.py
 
-    - name: Run Fog Model
-      run: python fog_process.py
-
-    - name: Commit and Push Maps
-      run: |
-        git config --global user.name "GitHub Action"
-        git config --global user.email "action@github.com"
-        git add images/*.png
-        git commit -m "Update Fog Forecast Maps" || echo "No changes to commit"
-        git push
+      - name: Commit and Push Updates
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all new/updated images and the status JSON
+          git add images/*.png
+          git add images/current_status.json
+          
+          # Only commit if changes actually exist to avoid workflow errors
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update Fog Maps and Status: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            git push
+          fi
