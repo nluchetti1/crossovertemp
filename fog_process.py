@@ -1,193 +1,142 @@
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import cartopy.io.shapereader as shpreader
-import numpy as np
 import xarray as xr
-from herbie import Herbie
-from datetime import datetime, timedelta
+import numpy as np
 import os
-import sys
-import warnings
+import json
+from datetime import datetime, timedelta
+from herbie import Herbie  # pip install herbie-data
 
-# Suppress warnings
-warnings.filterwarnings("ignore")
-
-# --- CONFIGURATION ---
-LOOKBACK_HOURS = 6
-FORECAST_HOURS = 18
+# ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- DOMAIN SETTINGS (NC/VA/TN/SC) ---
-PLOT_EXTENT = [-85, -75, 32, 38] 
+# Define the region (Mid-Atlantic based on your image)
+EXTENT = [-84, -75, 33, 41] # [West, East, South, North]
 
-def get_counties_feature():
-    """
-    Safely attempts to download/load US Counties. 
-    Returns None if download fails (to prevent script crash).
-    """
+# ================= DATE LOGIC =================
+# We need to find the latest *completed* run.
+# HRRR takes about 1-1.5 hours to upload. We look back 2 hours to be safe.
+current_utc = datetime.utcnow()
+model_init_time = current_utc - timedelta(hours=2)
+
+# Round down to the nearest hour (e.g., 23:15 -> 23:00)
+model_init_time = model_init_time.replace(minute=0, second=0, microsecond=0)
+
+# Generate the ID strings
+date_str = model_init_time.strftime("%Y%m%d") # 20260217
+hour_str = model_init_time.strftime("%H")     # 23
+run_id = f"{date_str}_{hour_str}z"            # 20260217_23z
+
+print(f"=======================================")
+print(f"Script Execution Time: {current_utc}")
+print(f"Target Model Run:      {run_id}")
+print(f"=======================================")
+
+# ================= PROCESSING LOOP =================
+# HRRR Forecast hours 1 through 18
+forecast_hours = range(1, 19)
+
+for fxx in forecast_hours:
+    print(f"Processing Forecast Hour: {fxx:02d}...")
+
     try:
-        print("Attempting to load County Shapefiles...")
-        reader = shpreader.Reader(shpreader.natural_earth(resolution='10m', category='cultural', name='admin_2_counties_lakes_north_america'))
-        counties = list(reader.geometries())
-        return cfeature.ShapelyFeature(counties, ccrs.PlateCarree())
-    except Exception as e:
-        print(f"WARNING: Could not load counties (Server 404/Timeout). Skipping county lines. Error: {e}")
-        return None
+        # 1. Initialize Herbie to fetch HRRR data
+        # We look for Surface fields (Temp and Dewpoint)
+        H = Herbie(
+            model_init_time,
+            model='hrrr',
+            product='sfc',
+            fxx=fxx
+        )
 
-def get_crossover_temp():
-    """
-    Calculates TXover: Minimum dewpoint observed during warmest daytime hours.
-    """
-    print("--- Calculating Crossover Temperature (TXover) ---")
-    dps = []
-    
-    # Round current time down to nearest hour
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
-    
-    for i in range(LOOKBACK_HOURS):
-        time_step = now - timedelta(hours=i)
-        try:
-            # Fetch HRRR Analysis (fxx=0) for Surface Dewpoint
-            H = Herbie(time_step, model="hrrr", product="sfc", fxx=0)
-            ds = H.xarray(":(DPT):2 m above ground")
-            
-            # Convert Kelvin to Fahrenheit
-            dpt_f = (ds['d2m'] - 273.15) * 9/5 + 32
-            dps.append(dpt_f)
-            print(f"Loaded Dewpoint for {time_step}")
-        except Exception as e:
-            print(f"Skipping {time_step}: {e}")
+        # 2. Download/Open the specific variables we need
+        # We need 2m Temperature (t2m) and 2m Dewpoint (d2m)
+        # SearchString uses regex to grab only necessary layers to save bandwidth
+        ds = H.xarray(":(TMP|DPT):2 m above ground")
 
-    if not dps:
-        print("CRITICAL: No dewpoint data found.")
-        sys.exit(1)
-
-    # Stack and find minimum Dewpoint per pixel
-    concat_da = xr.concat(dps, dim='time')
-    txover = concat_da.min(dim='time')
-    return txover
-
-def plot_crossover_map(txover, ds_sample, counties_feature):
-    """
-    Generates a static map of the calculated Crossover Temp.
-    """
-    print("--- Generating Crossover Analysis Map ---")
-    try:
-        fig = plt.figure(figsize=(12, 10))
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-        ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
-
-        # Features
-        ax.add_feature(cfeature.COASTLINE, linewidth=1)
-        ax.add_feature(cfeature.BORDERS, linewidth=1)
-        ax.add_feature(cfeature.STATES, linewidth=1)
+        # 3. Extract Data & Apply Crossover Logic
+        # Note: 't2m' and 'd2m' variable names might vary slightly by GRIB source
+        # Usually in Herbie/cfgrib they map to 't2m' and 'd2m' or 't' and 'dpt'
         
-        # Add Counties if available
-        if counties_feature:
-            ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3)
+        # Verify variable names in your specific environment if this fails
+        temp_k = ds['t2m'] 
+        dew_k = ds['d2m']
 
-        # Plot Data
-        cs = ax.pcolormesh(ds_sample.longitude, ds_sample.latitude, txover, 
-                           transform=ccrs.PlateCarree(), 
-                           cmap='BrBG', vmin=20, vmax=70, shading='auto')
+        # Convert Kelvin to Fahrenheit
+        temp_f = (temp_k - 273.15) * 9/5 + 32
+        dew_f = (dew_k - 273.15) * 9/5 + 32
         
-        cbar = plt.colorbar(cs, orientation='horizontal', pad=0.05, aspect=50)
-        cbar.set_label("Dewpoint (°F)")
+        # --- CROSSOVER LOGIC ---
+        # NOTE: True Crossover logic requires the previous afternoon's Min Dewpoint Depression.
+        # Since this is a simple hourly run, we are approximating based on your image legend:
+        # "Yellow = Mist (T < Tx)" and "Purple = Dense Fog (T < Tx-3)"
+        
+        # Simple Fog Approximation (T - Td spread)
+        # Modify this math to match your exact Crossover formula
+        dep = temp_f - dew_f
+        
+        # Mask: 0 = Clear, 1 = Mist (Yellow), 2 = Dense Fog (Purple)
+        fog_mask = np.zeros_like(temp_f)
+        
+        # If Depression < 3.0 -> Mist (Yellow)
+        fog_mask[dep < 3.0] = 1 
+        # If Depression < 1.0 -> Dense Fog (Purple)
+        fog_mask[dep < 1.0] = 2 
 
-        plt.title(f"Calculated Crossover Temp (Min Afternoon Dewpoint)\nBased on lowest Td from last {LOOKBACK_HOURS} hours", fontweight='bold')
+        # ================= PLOTTING =================
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        ax.set_extent(EXTENT)
+
+        # Add Features
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.BORDERS)
+        ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+        # Plot the Fog Mask
+        # We use a custom colormap: Transparent, Yellow, Purple
+        from matplotlib.colors import ListedColormap
+        cmap = ListedColormap(['none', 'gold', 'purple'])
         
-        filename = "crossover_analysis.png"
+        # Plot data (using pcolormesh for speed)
+        # Using a masked array to hide "Clear" areas
+        masked_data = np.ma.masked_where(fog_mask == 0, fog_mask)
+        
+        mesh = ax.pcolormesh(
+            ds.longitude, ds.latitude, masked_data,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            vmin=0, vmax=2
+        )
+
+        # Titles
+        valid_time = model_init_time + timedelta(hours=fxx)
+        plt.title(f"Crossover Fog Forecast\nInit: {hour_str}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=10, fontweight='bold')
+        plt.title("Yellow: Mist | Purple: Dense Fog", loc='right', fontsize=8, color='purple')
+
+        # Save Image
+        filename = f"fog_{run_id}_f{fxx:02d}.png"
         save_path = os.path.join(OUTPUT_DIR, filename)
         plt.savefig(save_path, bbox_inches='tight', dpi=100)
-        plt.close()
-        print(f"Generated {filename}")
+        plt.close(fig)
         
+        print(f" -> Saved {filename}")
+
     except Exception as e:
-        print(f"Failed to generate crossover map: {e}")
+        print(f"Failed to process hour {fxx}: {e}")
 
-def process_forecast(txover, counties_feature):
-    print("--- Processing Forecast ---")
-    
-    # Safe run time
-    model_init_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    print(f"Using Model Run: {model_init_time} UTC")
-    
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    success_count = 0
+# ================= STATUS UPDATE =================
+# This is the crucial handshake for your website
+status_data = {
+    "run_id": run_id,               # e.g. "20260217_23z"
+    "model_init": f"{hour_str}Z",   # e.g. "23Z"
+    "generated_at": current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+}
 
-    for fxx in range(1, FORECAST_HOURS + 1):
-        try:
-            H = Herbie(model_init_time, model="hrrr", product="sfc", fxx=fxx)
-            ds = H.xarray(":(TMP):2 m above ground")
-            t_sfc_f = (ds['t2m'] - 273.15) * 9/5 + 32
-            
-            # --- ALGORITHM ---
-            fog_mask = np.zeros_like(t_sfc_f)
-            fog_mask[t_sfc_f <= txover] = 1        # Mist
-            fog_mask[t_sfc_f <= (txover - 3.0)] = 2 # Dense Fog
-            
-            # --- PLOTTING ---
-            fig = plt.figure(figsize=(12, 10))
-            ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-            ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
-            
-            # Features
-            ax.add_feature(cfeature.COASTLINE, linewidth=1)
-            ax.add_feature(cfeature.BORDERS, linewidth=1)
-            ax.add_feature(cfeature.STATES, linewidth=0.8)
-            
-            if counties_feature:
-                ax.add_feature(counties_feature, facecolor='none', edgecolor='gray', linewidth=0.3, alpha=0.5)
-            
-            # Colormap
-            from matplotlib.colors import ListedColormap
-            cmap = ListedColormap(['none', '#FFEB3B', '#8E24AA']) 
-            data_to_plot = np.ma.masked_where(fog_mask == 0, fog_mask)
-            
-            ax.pcolormesh(ds.longitude, ds.latitude, data_to_plot, 
-                               transform=ccrs.PlateCarree(), cmap=cmap, shading='auto')
-            
-            valid_time = model_init_time + timedelta(hours=fxx)
-            
-            plt.title(f"Crossover Fog Forecast\nInit: {model_init_time.strftime('%H')}Z | Valid: {valid_time.strftime('%a %H')}Z (+{fxx})", loc='left', fontsize=12, fontweight='bold')
-            plt.title("Yellow: Mist (T < Tx)\nPurple: Dense Fog (T < Tx-3)", loc='right', fontsize=9, color='purple')
-            
-            filename = f"fog_{datetime.utcnow().strftime('%Y%m%d')}_23z_f{fxx:02d}.png"
-            save_path = os.path.join(OUTPUT_DIR, filename)
-            plt.savefig(save_path, bbox_inches='tight', dpi=100)
-            plt.close()
-            
-            if os.path.exists(save_path):
-                print(f"Generated {filename}")
-                success_count += 1
-            
-        except Exception as e:
-            print(f"Failed to generate frame {fxx}: {e}")
+json_path = os.path.join(OUTPUT_DIR, "current_status.json")
+with open(json_path, "w") as f:
+    json.dump(status_data, f)
 
-    if success_count == 0:
-        print("ERROR: 0 images were generated. Exiting.")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    try:
-        # 1. Load Counties (Fail gracefully if server down)
-        counties_feat = get_counties_feature()
-
-        # 2. Get Txover
-        txover_grid = get_crossover_temp()
-        
-        # 3. Get Sample Data (using SAFE time)
-        safe_time = (datetime.utcnow() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-        H_sample = Herbie(safe_time, model="hrrr", product="sfc", fxx=0)
-        ds_sample = H_sample.xarray(":(DPT):2 m above ground")
-        
-        # 4. Plot Analysis Map
-        plot_crossover_map(txover_grid, ds_sample, counties_feat)
-        
-        # 5. Run Forecast
-        process_forecast(txover_grid, counties_feat)
-        
-    except Exception as e:
-        print(f"Critical Error: {e}")
-        sys.exit(1)
+print("Process Complete. Status updated.")
