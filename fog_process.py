@@ -1,5 +1,4 @@
 import warnings
-# Suppress specific xarray/cfgrib merge warnings and Herbie regex alerts
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -7,7 +6,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, glob, imageio.v2 as imageio
+import os, json, glob
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, UTC
 from herbie import Herbie
@@ -25,8 +24,8 @@ CITIES = [
 ]
 
 MODEL_CONFIGS = [
-    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'RAP',  'model': 'rap',  'prod': 'anl', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'sfc', 'search': ':(TMP):2 m'},
     {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
     {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
     {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
@@ -40,29 +39,30 @@ def add_map_features(ax):
     ax.add_feature(counties, edgecolor='black', linewidth=0.4, alpha=0.5)
 
 # ================= 1. DYNAMIC CROSSOVER LOGIC =================
-# Fixed DeprecationWarning by using timezone-aware UTC now
-now = datetime.now(UTC).replace(tzinfo=None) 
+now = datetime.now(UTC).replace(tzinfo=None)
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
 
 print(f"Running RTMA Analysis for {ref_time}")
 H_init = Herbie(ref_time, model='rtma', product='anl')
 ds_init = H_init.xarray(":(TMP|DPT):2 m")
-
-# FIXED: Handle case where Herbie returns a single Dataset instead of a list
 if isinstance(ds_init, list): ds_init = ds_init[0]
 
 if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
 lons_rtma, lats_rtma = ds_init.longitude.values, ds_init.latitude.values
 max_t_grid, xover_grid = np.full(lons_rtma.shape, -999.0), np.full(lons_rtma.shape, -999.0)
 
+# Process RTMA window
 for i in range(12):
     t = ref_time - timedelta(hours=i)
     try:
         H = Herbie(t, model='rtma', product='anl', verbose=False)
         ds = H.xarray(":(TMP|DPT):2 m")
         if isinstance(ds, list): ds = ds[0]
-        t_f, d_f = (ds['t2m'].values - 273.15) * 9/5 + 32, (ds['d2m'].values - 273.15) * 9/5 + 32
+        # Robustly find temp and dewpoint
+        t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+        d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+        t_f, d_f = (ds[t_key].values - 273.15) * 9/5 + 32, (ds[d_key].values - 273.15) * 9/5 + 32
         mask = t_f > max_t_grid
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
@@ -74,33 +74,31 @@ hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
-    print(f"Starting loop for {cfg['id']}...")
+    print(f"--- Attempting {cfg['id']} ---")
     for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             ds_data = H_fcst.xarray(cfg['search'])
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
-            if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+            # Identify the temperature variable dynamically
+            t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
+            print(f"  {cfg['id']} F{fxx:02}: Using variable '{t_var}'")
             
-            t_var = 't2m' if 't2m' in ds else list(ds.data_vars)[0]
+            if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            f_wind = np.full(f_temp.shape, 5.0) 
+            # Simple thresholding logic
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
-            
             fog = np.zeros_like(f_temp)
             fog[(f_temp <= f_thresh)] = 1
             fog[(f_temp <= (f_thresh - 3.0))] = 2
 
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
-            
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                x_off = -0.06 if name == 'KINT' else 0.06
-                ax.text(lon + x_off, lat + 0.05, name, transform=ccrs.PlateCarree(), 
-                        fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
+                ax.text(lon + 0.06, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
 
             ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
                           transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), 
@@ -110,7 +108,9 @@ for cfg in MODEL_CONFIGS:
             plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
             plt.close()
-        except: continue
+        except Exception as e:
+            print(f"  Error on {cfg['id']} F{fxx}: {e}")
+            continue
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
