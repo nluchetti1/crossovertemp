@@ -6,7 +6,8 @@ on:
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Increased timeout to 60 minutes for multi-model processing
+    timeout-minutes: 60 
     permissions:
       contents: write
     steps:
