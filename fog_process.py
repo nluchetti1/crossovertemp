@@ -1,4 +1,5 @@
 import warnings
+# Suppress specific xarray/cfgrib merge warnings and Herbie regex alerts
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -6,7 +7,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, glob
+import os, json, shutil
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, UTC
 from herbie import Herbie
@@ -76,17 +77,16 @@ for cfg in MODEL_CONFIGS:
     for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            # FIXED: Engine parameter is only for the .xarray() method
             ds_data = H_fcst.xarray(cfg['search'], engine='cfgrib')
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
-            # Identify Surface Temp
+            # Surface Temp extraction
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Stability Filter: Check for 925mb winds (Proxy 5kts if missing in NBM)
+            # Stability Filter: 925mb Winds
             try:
                 u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
                 f_wind = np.sqrt(u**2 + v**2) * 1.94384
@@ -95,7 +95,6 @@ for cfg in MODEL_CONFIGS:
 
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             fog = np.zeros_like(f_temp)
-            # Apply Logic
             fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
             fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
@@ -118,5 +117,10 @@ for cfg in MODEL_CONFIGS:
             print(f"  Error on {cfg['id']} F{fxx}: {e}")
             continue
 
+# Final status and cleanup
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+
+# CLEANUP: Delete the local herbie data directory to save space on the GitHub runner
+if os.path.exists('~/data'):
+    shutil.rmtree('~/data', ignore_errors=True)
