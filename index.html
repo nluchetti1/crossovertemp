@@ -2,20 +2,24 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crossover Fog Dashboard</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
         .wrapper { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; }
+        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap; }
         select, button { padding: 12px 15px; border-radius: 6px; border: 1px solid #ccc; font-weight: bold; cursor: pointer; }
-        button { background: #5d469f; color: white; border: none; }
+        button { background: #5d469f; color: white; border: none; transition: 0.2s; }
+        button:hover { background: #483582; }
         .btn-alt { background: #495057; }
-        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; }
-        .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
+        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; min-height: 400px; }
+        .nav { margin-top: 15px; background: #eee; padding: 15px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
         .logic-card { text-align: left; font-size: 0.95em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 25px; color: #333; line-height: 1.6; }
         .color-key { font-weight: bold; }
         .yellow { color: #b8860b; }
         .purple { color: #800080; }
+        .footer-link { margin-top: 20px; font-size: 0.8em; color: #666; }
+        .footer-link a { color: #5d469f; text-decoration: none; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -40,17 +44,21 @@
 
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 180px; display: inline-block;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 220px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
 
     <div class="logic-card">
         <strong>Combo Technique Implementation:</strong><br><br>
-        1. <strong>Crossover Identification:</strong> Forecast triggers when the model surface temperature (<strong>T</strong>) falls to or below the crossover temperature (<strong>T<sub>xover</sub></strong>). <strong>T<sub>xover</sub></strong> is defined as the dew point recorded by RTMA at the time of maximum daytime heating.<br><br>
+        1. <strong>Crossover Identification:</strong> Forecast triggers when the model surface temperature (<strong>T</strong>) falls to or below the crossover temperature (<strong>T<sub>xover</sub></strong>). <strong>T<sub>xover</sub></strong> is the dew point recorded by RTMA at peak daytime heating.<br><br>
         &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when <strong>T &le; T<sub>xover</sub></strong> (Visibility: 1-3 SM).<br>
         &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when <strong>T &le; T<sub>xover</sub> - 3&deg;F</strong> (Visibility: &lt; 1/2 SM).<br><br>
-        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if 925mb winds are <strong>&gt; 15 knots</strong>, as vertical mixing prevents radiation fog formation. (NBM Percentiles use HRRR proxy winds for this filter).<br><br>
+        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if 925mb winds are <strong>&gt; 15 knots</strong>. (NBM Percentiles use HRRR proxy winds for this filter).<br><br>
         3. <strong>Ensemble Approach:</strong> Comparing high-resolution deterministic (HRRR/RAP) against NBM percentiles provides a "confidence bound" for fog coverage.
+    </div>
+
+    <div class="footer-link">
+        Field Access: <a href="https://nluchetti1.github.io/crossovertemp/" target="_blank">nluchetti1.github.io/crossovertemp/</a>
     </div>
 </div>
 
@@ -58,38 +66,47 @@
     let runId = null, frame = 1, mode = 'forecast', currentModel = 'HRRR';
 
     async function start() {
-        const r = await fetch(`images/current_status.json?v=${Date.now()}`);
-        const d = await r.json();
-        runId = d.run_id;
-        document.getElementById('status-bar').innerText = `Init: ${d.model_init} | Updated: ${d.generated_at}`;
-        setMode('forecast');
+        try {
+            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+            const d = await r.json();
+            runId = d.run_id;
+            document.getElementById('status-bar').innerText = `Init: ${d.model_init} | Updated: ${d.generated_at}`;
+            setMode('forecast');
+        } catch (e) {
+            document.getElementById('status-bar').innerText = "Error loading status. Check GitHub Actions.";
+        }
     }
 
+    // SYNC VIEW: Changing model preserves the current frame (hour)
     function changeModel() {
         currentModel = document.getElementById('model-select').value;
-        update();
+        if (mode === 'forecast') {
+            update();
+        }
     }
 
     function setMode(m) {
         mode = m;
         if (mode === 'analysis') {
             document.getElementById('map-frame').src = 'images/crossover_analysis.png';
-            document.getElementById('nav-ui').style.visibility = 'hidden';
+            document.getElementById('nav-ui').style.display = 'none';
         } else {
-            document.getElementById('nav-ui').style.visibility = 'visible';
+            document.getElementById('nav-ui').style.display = 'flex';
             update();
         }
     }
 
     function update() {
         if (!runId || mode === 'analysis') return;
-        document.getElementById('map-frame').src = `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
+        const imgPath = `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
+        document.getElementById('map-frame').src = imgPath;
         document.getElementById('label').innerText = `${currentModel} | Hour: +${frame}`;
     }
 
     function changeFrame(d) {
         frame += d;
-        if (frame > 18) frame = 1; if (frame < 1) frame = 18;
+        if (frame > 18) frame = 1; 
+        if (frame < 1) frame = 18;
         update();
     }
 
