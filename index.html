@@ -2,41 +2,46 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crossover Fog Dashboard</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #f0f2f5; padding: 20px; }
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f0f2f5; padding: 20px; }
         .wrapper { max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; }
-        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #eee; }
+        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap; }
+        select, button { padding: 12px 18px; border-radius: 6px; border: 1px solid #ddd; font-weight: bold; cursor: pointer; }
+        button { background: #5d469f; color: white; border: none; }
+        .btn-alt { background: #6c757d; }
+        .btn-play { background: #28a745; }
+        .btn-play.playing { background: #dc3545; }
+        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #eee; margin-top: 10px; }
         .nav { margin-top: 20px; background: #f8f9fa; padding: 15px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
-        button { padding: 12px 18px; border-radius: 6px; border: none; font-weight: bold; cursor: pointer; background: #5d469f; color: white; }
         .logic-card { text-align: left; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 30px; color: #444; }
     </style>
 </head>
 <body>
 <div class="wrapper">
     <h2>Multi-Model Crossover Fog Dashboard</h2>
-    <div id="status-bar" style="color: #666; margin-bottom: 10px;">Syncing runs...</div>
+    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Loading latest runs...</div>
 
     <div class="controls">
-        <select id="model-select" onchange="changeModel()" style="padding: 10px;">
+        <select id="model-select" onchange="changeModel()">
             <option value="HRRR">HRRR (3km)</option>
             <option value="RAP">RAP (13km)</option>
-            <option value="NBM_P25">NBM 25%</option>
-            <option value="NBM_P50">NBM 50%</option>
-            <option value="NBM_P75">NBM 75%</option>
+            <option value="NBM_P25">NBM 25% (Cool)</option>
+            <option value="NBM_P50">NBM 50% (Mean)</option>
+            <option value="NBM_P75">NBM 75% (Warm)</option>
         </select>
-        <button onclick="setMode('analysis')">Analysis Map</button>
+        <button class="btn-alt" onclick="setMode('analysis')">Analysis Map</button>
         <button onclick="setMode('forecast')">Forecasts</button>
-        <button id="play-btn" onclick="togglePlay()" style="background: #28a745;">Play Loop</button>
+        <button id="play-btn" class="btn-play" onclick="togglePlay()">Play Loop</button>
         <button onclick="saveGif()" style="background: #17a2b8;">Save as GIF</button>
     </div>
 
-    <img id="map-frame" src="">
+    <img id="map-frame" src="" alt="Meteorological Map">
 
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 200px;">Hour: --</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 220px;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
 
@@ -63,17 +68,22 @@
         playing = !playing;
         const btn = document.getElementById('play-btn');
         if (playing) {
-            btn.innerText = "Pause"; btn.style.background = "#dc3545";
+            btn.innerText = "Pause"; btn.classList.add('playing');
             timer = setInterval(() => changeFrame(1), 800);
         } else {
-            btn.innerText = "Play Loop"; btn.style.background = "#28a745";
+            btn.innerText = "Play Loop"; btn.classList.remove('playing');
             clearInterval(timer);
         }
     }
 
-    function saveGif() { window.open(`images/fog_${currentModel}_loop.gif`, '_blank'); }
+    function saveGif() {
+        window.open(`images/fog_${currentModel}_loop.gif`, '_blank');
+    }
 
-    function changeModel() { currentModel = document.getElementById('model-select').value; update(); }
+    function changeModel() {
+        currentModel = document.getElementById('model-select').value;
+        update();
+    }
 
     function setMode(m) {
         mode = m;
@@ -85,7 +95,7 @@
         if (!runId) return;
         const src = (mode === 'analysis') ? 'images/crossover_analysis.png' : `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
         document.getElementById('map-frame').src = src;
-        document.getElementById('label').innerText = (mode === 'analysis') ? 'Threshold Analysis' : `${currentModel} | Hour: +${frame}`;
+        document.getElementById('label').innerText = (mode === 'analysis') ? 'RTMA Analysis' : `${currentModel} Forecast | Hour: +${frame}`;
     }
 
     function changeFrame(d) {
