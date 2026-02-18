@@ -24,12 +24,12 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# Refined configs: NamNest and HREF often need specific product strings
+# Added 'domain': 'conus' to HREF and NamNest to satisfy Herbie requirements
 MODEL_CONFIGS = [
     {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'}
+    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'domain': 'conus'}
 ]
 
 def add_map_features(ax):
@@ -73,27 +73,30 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
-    # NamNest/HREF run 00, 06, 12, 18Z. We search back 18 hours to ensure we catch one.
+    # Define search depth
     search_hours = 18 if cfg['id'] in ['NamNest', 'HREF'] else 6
+    
+    # Extra arguments (like domain='conus') to pass to Herbie
+    extra_kwargs = {k: v for k, v in cfg.items() if k in ['domain']}
     
     for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
         try:
-            H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False)
+            H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **extra_kwargs)
             if H_test.grib: 
                 found_init = check_time
                 break
         except: continue
     
     if not found_init: 
-        print(f"Skipping {cfg['id']}: No data found in the last {search_hours} hours.")
+        print(f"Skipping {cfg['id']}: No data found.")
         continue
         
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
     for fxx in range(1, 2):
         try:
-            H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
+            H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **extra_kwargs)
             ds_data = H_fcst.xarray(cfg['search'])
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
@@ -101,7 +104,6 @@ for cfg in MODEL_CONFIGS:
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Universal wind key finder for 925mb
             try:
                 u = [v for v in ds.data_vars if 'u' in v.lower()][0]
                 v = [v for v in ds.data_vars if 'v' in v.lower()][0]
@@ -116,7 +118,7 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # Legend above plot area
+            # Header Legend
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
 
