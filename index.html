@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Multi-Model Crossover Dashboard</title>
+    <title>Crossover Fog Dashboard</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background-color: #f8f9fa; padding: 20px; }
         .wrapper { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
@@ -12,7 +12,10 @@
         .btn-alt { background: #495057; }
         #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; }
         .nav { margin-top: 15px; background: #eee; padding: 10px; border-radius: 8px; }
-        .logic-card { text-align: left; font-size: 0.9em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 25px; color: #333; }
+        .logic-card { text-align: left; font-size: 0.95em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 25px; color: #333; line-height: 1.6; }
+        .color-key { font-weight: bold; }
+        .yellow { color: #b8860b; }
+        .purple { color: #800080; }
     </style>
 </head>
 <body>
@@ -21,15 +24,15 @@
     <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 15px;">Loading latest data...</div>
 
     <div class="controls">
-        <label for="model-select">Select Model:</label>
+        <label for="model-select">Model Source:</label>
         <select id="model-select" onchange="changeModel()">
             <option value="HRRR">HRRR (3km)</option>
             <option value="RAP">RAP (13km)</option>
-            <option value="NBM_P25">NBM 25th% (Cool Bias)</option>
-            <option value="NBM_P50">NBM 50th% (Mean)</option>
-            <option value="NBM_P75">NBM 75th% (Warm Bias)</option>
+            <option value="NBM_P25">NBM 25th% (Ensemble Cool)</option>
+            <option value="NBM_P50">NBM 50th% (Ensemble Mean)</option>
+            <option value="NBM_P75">NBM 75th% (Ensemble Warm)</option>
         </select>
-        <button class="btn-alt" onclick="setMode('analysis')">View Crossover Map</button>
+        <button class="btn-alt" onclick="setMode('analysis')">View Threshold Map</button>
         <button onclick="setMode('forecast')">View Forecast Loop</button>
     </div>
 
@@ -37,14 +40,17 @@
 
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 150px; display: inline-block;">Hour: +1</span>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 180px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
 
     <div class="logic-card">
-        <strong>Implementation Logic:</strong><br>
-        1. <strong>Crossover:</strong> Triggers when Surface Temp &le; Peak Heating Dewpoint.<br>
-        2. <strong>Ensemble Approach:</strong> Comparison of HRRR, RAP, and NBM percentiles provides a "confidence" bound for fog development.
+        <strong>Combo Technique Implementation:</strong><br><br>
+        1. <strong>Crossover Identification:</strong> Forecast triggers when the model surface temperature (<strong>T</strong>) falls to or below the crossover temperature (<strong>T<sub>xover</sub></strong>). <strong>T<sub>xover</sub></strong> is defined as the dew point recorded by RTMA at the time of maximum daytime heating.<br><br>
+        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when <strong>T &le; T<sub>xover</sub></strong> (Visibility: 1-3 SM).<br>
+        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when <strong>T &le; T<sub>xover</sub> - 3&deg;F</strong> (Visibility: &lt; 1/2 SM).<br><br>
+        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if 925mb winds are <strong>&gt; 15 knots</strong>, as vertical mixing prevents radiation fog formation. (NBM Percentiles use HRRR proxy winds for this filter).<br><br>
+        3. <strong>Ensemble Approach:</strong> Comparing high-resolution deterministic (HRRR/RAP) against NBM percentiles provides a "confidence bound" for fog coverage.
     </div>
 </div>
 
@@ -78,7 +84,7 @@
     function update() {
         if (!runId || mode === 'analysis') return;
         document.getElementById('map-frame').src = `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
-        document.getElementById('label').innerText = `Hour: +${frame}`;
+        document.getElementById('label').innerText = `${currentModel} | Hour: +${frame}`;
     }
 
     function changeFrame(d) {
