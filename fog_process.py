@@ -1,5 +1,4 @@
 import warnings
-# Suppress xarray/cfgrib merge warnings seen in your log
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -44,7 +43,6 @@ now = datetime.utcnow()
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
 
-print(f"Running RTMA Analysis for {ref_time}")
 H_init = Herbie(ref_time, model='rtma', product='anl')
 ds_init = H_init.xarray(":(TMP|DPT):2 m")[0]
 if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
@@ -64,13 +62,11 @@ for i in range(12):
 # ================= 2. FORECAST LOOP =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
-
-# Adjust init time to ensure data is likely available on servers
 hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
-    print(f"Processing Model: {cfg['id']}")
+    print(f"Starting loop for {cfg['id']}...")
     for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
@@ -78,11 +74,11 @@ for cfg in MODEL_CONFIGS:
             ds = ds_list[0] if isinstance(ds_list, list) else ds_list
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
-            # Determine Temp variable
+            # Surface Temp extraction
             t_var = 't2m' if 't2m' in ds else list(ds.data_vars)[0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Use proxy wind (5kts) if model/product lacks wind data
+            # Wind logic: NBM/RAP fallback to 5kts if 925mb wind not found
             f_wind = np.full(f_temp.shape, 5.0) 
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             
@@ -93,10 +89,9 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # RESTORED CITY POINTS
+            # RE-ADDED CITY DOTS AND LABELS
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                # Shift KINT/KGSO slightly to prevent label clash
                 x_off = -0.06 if name == 'KINT' else 0.06
                 ax.text(lon + x_off, lat + 0.05, name, transform=ccrs.PlateCarree(), 
                         fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
@@ -113,6 +108,5 @@ for cfg in MODEL_CONFIGS:
             print(f"Skipping {cfg['id']} F{fxx}: {e}")
             continue
 
-# Final status update
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
