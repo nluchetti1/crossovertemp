@@ -1,5 +1,4 @@
 import warnings
-# Suppress specific xarray and Herbie alerts for a cleaner log
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -24,7 +23,6 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# RAP product set to 'awp130pgrb' which often has better metadata compatibility
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',  'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m'},
@@ -70,29 +68,26 @@ for i in range(12):
 # ================= 2. FORECAST LOOP =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
+# Using 3 hours ago to ensure NBM availability
 hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"--- Attempting {cfg['id']} ---")
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             
-            # Use direct download for NBM/RAP to avoid indexing errors
-            if cfg['model'] in ['nbm', 'rap']:
-                H_fcst.download(cfg['search'])
-                ds_data = H_fcst.xarray(cfg['search'])
-            else:
-                ds_data = H_fcst.xarray(cfg['search'])
-                
+            # SOLUTION: Force a physical download of the subset to resolve Errno 2
+            H_fcst.download(cfg['search'])
+            ds_data = H_fcst.xarray(cfg['search'])
+            
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Stability Check
             try:
                 u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
                 f_wind = np.sqrt(u**2 + v**2) * 1.94384
