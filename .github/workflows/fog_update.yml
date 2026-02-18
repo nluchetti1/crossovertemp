@@ -1,42 +1,34 @@
-=name: Hourly Fog Update
-
+name: Hourly Fog Update
 on:
   schedule:
-    # Runs at the 45th minute of 23Z, and 00Z through 10Z
     - cron: '45 23,0-10 * * *'
   workflow_dispatch:
-
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy
-
       - name: Execute Fog Processing
         run: python fog_process.py
-
       - name: Commit and Force-Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
           git add images/*
           if git diff --staged --quiet; then
             echo "No changes"
           else
-            git commit -m "Update Fog Dashboard"
-            # Overwrite remote conflicts with current run data
+            git commit -m "Update Multi-Model Fog Dashboard"
             git pull --rebase -X theirs origin main
             git push origin main
           fi
