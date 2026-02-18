@@ -88,7 +88,7 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 for cfg in MODEL_CONFIGS:
     gif_frames = []
     print(f"--- Processing {cfg['id']} ---")
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             if cfg['model'] == 'nbm':
                 url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{hrrr_init.strftime('%Y%m%d')}/{hrrr_init.strftime('%H')}/core/blend.t{hrrr_init.strftime('%H')}z.core.f{fxx:03d}.co.grib2"
