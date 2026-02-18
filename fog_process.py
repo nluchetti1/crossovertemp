@@ -16,15 +16,11 @@ import xarray as xr
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Focused Extent for NC/SC
 EXTENT = [-84.0, -75.0, 33.0, 37.5] 
 
 CITIES = [
-    [-80.22, 36.13, 'KINT'], 
-    [-79.94, 36.10, 'KGSO'], 
-    [-78.79, 35.88, 'KRDU'], 
-    [-78.88, 35.00, 'KFAY'],
+    [-80.22, 36.13, 'KINT'], [-79.94, 36.10, 'KGSO'], 
+    [-78.79, 35.88, 'KRDU'], [-78.88, 35.00, 'KFAY'],
     [-77.89, 35.85, 'KRWI']
 ]
 
@@ -44,7 +40,6 @@ def add_map_features(ax):
     ax.add_feature(counties, edgecolor='gray', linewidth=0.3)
 
 def plot_cities(ax):
-    """Ensure cities plot on top of everything"""
     for lon, lat, name in CITIES:
         ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree(), zorder=10)
         t = ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), 
@@ -57,7 +52,7 @@ now = datetime.now(timezone.utc).replace(tzinfo=None)
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
 
-# Default grid
+# Default Grid
 lons_rtma, lats_rtma = np.meshgrid(np.linspace(EXTENT[0], EXTENT[1], 100), np.linspace(EXTENT[2], EXTENT[3], 100))
 xover_grid = np.full(lons_rtma.shape, 50.0)
 rtma_success = False
@@ -82,7 +77,6 @@ try:
             
             t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
             d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
-            
             t_f = (ds[t_key].values - 273.15) * 9/5 + 32
             d_f = (ds[d_key].values - 273.15) * 9/5 + 32
             
@@ -94,7 +88,6 @@ try:
 except Exception as e:
     print(f"Warning: RTMA Analysis failed ({e}). Using dummy threshold.")
 
-# Plot Analysis
 fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 82, 2)
@@ -142,124 +135,109 @@ for cfg in MODEL_CONFIGS:
             try:
                 H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
                 ds = H_fcst.xarray(cfg['search'])[0]
-                
-                # Standardize Coords
                 if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
                 
-                # Get Temp
                 t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
                 f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
 
-                # Get Wind
                 try:
                     u = [v for v in ds.data_vars if 'u' in v.lower()][0]
                     v = [v for v in ds.data_vars if 'v' in v.lower()][0]
                     f_wind = np.sqrt(ds[u].values**2 + ds[v].values**2) * 1.94384
                 except: f_wind = np.full(f_temp.shape, 5.0)
 
-                # Process Frame
                 f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
                 fog = np.zeros_like(f_temp)
                 fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
                 fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
-                # Plot
                 fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
                 add_map_features(ax)
-                
                 ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                 ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
-                
                 plot_cities(ax)
-                
                 ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
                               transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
-                
                 valid_str = (found_init + timedelta(hours=fxx)).strftime('%H')
                 plt.title(f"{cfg['id']} Forecast | Init: {found_init.strftime('%H')}Z | Valid: {valid_str}Z", loc='left', fontweight='bold')
-                
                 f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png")
-                plt.savefig(f_name, bbox_inches='tight', dpi=100)
-                plt.close()
+                plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
                 gif_frames.append(imageio.imread(f_name))
-
             except Exception as e: continue
 
     # ------------------ NDFD PATH (MANUAL) ------------------
     elif cfg['source'] == 'manual_ndfd':
         print(f"Processing {cfg['id']} (NDFD Operational)")
         temp_file = "temp_ndfd.grib2"
-        try:
-            # Download the operational rolling file
-            url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
-            
-            # Use requests to download
-            with requests.get(url, stream=True) as r:
-                r.raise_for_status()
-                with open(temp_file, 'wb') as f:
-                    shutil.copyfileobj(r.raw, f)
+        # Primary and Backup URLs
+        urls = [
+            "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin",
+            "https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.20240320/ds.temp.bin" # Fallback pattern
+        ]
+        
+        success = False
+        for url in urls:
+            try:
+                # Use requests to download
+                r = requests.get(url, stream=True, timeout=10)
+                if r.status_code == 200:
+                    with open(temp_file, 'wb') as f:
+                        shutil.copyfileobj(r.raw, f)
+                    success = True
+                    break
+            except: continue
+        
+        if not success:
+            print("  > Failed to download NDFD from all sources.")
+            continue
 
-            # Open with generic filter to avoid 'heterogeneous' errors
-            # We filter specifically for '2t' (2 meter temp)
+        print("  > Download Complete. Opening GRIB and verifying...")
+        
+        # Open with STRICT filter to confirm we are getting 2m Temp
+        # shortName='2t' is the GRIB standard for 2-metre temperature
+        try:
             ds_full = xr.open_dataset(temp_file, engine='cfgrib', 
                                       backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+            
+            # SANITY CHECK: Print what we found
+            print(f"  > VALIDATION: Found variable '{list(ds_full.data_vars)[0]}'. Units: {ds_full[list(ds_full.data_vars)[0]].attrs.get('units', 'unknown')}")
+            print(f"  > VALIDATION: Found {len(ds_full.step)} time steps.")
 
-            # NDFD has a 'step' dimension. We iterate through that.
-            # Limit to first 18 steps to match other models
             steps = ds_full.step.values
             if len(steps) > 18: steps = steps[:18]
 
             for i, step_delta in enumerate(steps):
                 try:
                     ds = ds_full.sel(step=step_delta)
-                    
-                    if 'longitude' not in ds.coords:
-                        # Rename if needed (NDFD sometimes uses different names)
+                    if 'longitude' not in ds.coords and 'lon' in ds.coords:
                         ds = ds.rename({'lon': 'longitude', 'lat': 'latitude'})
 
-                    # Get Temp
+                    # Get Temp (K -> F)
                     f_temp = (ds.t2m.values - 273.15) * 9/5 + 32
-                    
-                    # NDFD Temp file has NO wind data. We assume calm for fog potential (worst case).
                     f_wind = np.full(f_temp.shape, 5.0)
 
-                    # Process Frame
                     f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
                     fog = np.zeros_like(f_temp)
-                    
-                    # Apply Mask
-                    fog[(f_temp <= f_thresh)] = 1        # Mist
-                    fog[(f_temp <= (f_thresh - 3.0))] = 2 # Dense Fog
+                    fog[(f_temp <= f_thresh)] = 1
+                    fog[(f_temp <= (f_thresh - 3.0))] = 2
 
-                    # Plot
                     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
                     add_map_features(ax)
-                    
                     ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
-                    
                     plot_cities(ax)
-                    
                     ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
                                   transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
                     
-                    # Calculate valid time
-                    valid_dt = now + timedelta(nanoseconds=step_delta) 
+                    valid_dt = now + timedelta(seconds=int(step_delta / np.timedelta64(1, 's')))
                     valid_str = valid_dt.strftime('%H')
-                    
-                    # Use index i+1 for filename to match f01, f02...
                     f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{i+1:02d}.png")
-                    
                     plt.title(f"{cfg['id']} Forecast | Init: {now.strftime('%H')}Z | Valid: {valid_str}Z", loc='left', fontweight='bold')
-                    plt.savefig(f_name, bbox_inches='tight', dpi=100)
-                    plt.close()
+                    plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
                     gif_frames.append(imageio.imread(f_name))
 
-                except Exception as e:
-                    # print(f"NDFD Frame {i} Error: {e}")
-                    continue
+                except Exception as e: continue
             
-            # Cleanup
             ds_full.close()
             if os.path.exists(temp_file): os.remove(temp_file)
 
@@ -272,7 +250,6 @@ for cfg in MODEL_CONFIGS:
         imageio.mimsave(gif_name, gif_frames, fps=2, loop=0)
         print(f"  > Generated GIF: {gif_name}")
 
-# Status Update
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
 
