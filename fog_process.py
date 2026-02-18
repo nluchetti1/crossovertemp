@@ -24,12 +24,12 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# Added 'domain': 'conus' to HREF and NamNest to satisfy Herbie requirements
+# HREF and NamNest require specific products and domains
 MODEL_CONFIGS = [
-    {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'domain': 'conus'}
+    {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
+    {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
+    {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic'},
+    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic', 'domain': 'conus'}
 ]
 
 def add_map_features(ax):
@@ -73,14 +73,17 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
-    # Define search depth
-    search_hours = 18 if cfg['id'] in ['NamNest', 'HREF'] else 6
-    
-    # Extra arguments (like domain='conus') to pass to Herbie
-    extra_kwargs = {k: v for k, v in cfg.items() if k in ['domain']}
+    # Logic to prioritize the most recent run based on model frequency
+    search_hours = 24 if cfg['freq'] == 'synoptic' else 6
+    extra_kwargs = {k: v for k, v in cfg.items() if k == 'domain'}
     
     for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
+        
+        # Ensure synoptic models only attempt 00, 06, 12, or 18Z
+        if cfg['freq'] == 'synoptic' and check_time.hour % 6 != 0:
+            continue
+            
         try:
             H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **extra_kwargs)
             if H_test.grib: 
@@ -89,12 +92,12 @@ for cfg in MODEL_CONFIGS:
         except: continue
     
     if not found_init: 
-        print(f"Skipping {cfg['id']}: No data found.")
+        print(f"Skipping {cfg['id']}: No recent data found.")
         continue
         
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
             H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **extra_kwargs)
             ds_data = H_fcst.xarray(cfg['search'])
@@ -104,10 +107,11 @@ for cfg in MODEL_CONFIGS:
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
+            # 925 mb Stability Mask Logic
             try:
-                u = [v for v in ds.data_vars if 'u' in v.lower()][0]
-                v = [v for v in ds.data_vars if 'v' in v.lower()][0]
-                f_wind = np.sqrt(ds[u].values**2 + ds[v].values**2) * 1.94384
+                u_key = [v for v in ds.data_vars if 'u' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
+                v_key = [v for v in ds.data_vars if 'v' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
+                f_wind = np.sqrt(ds[u_key].values**2 + ds[v_key].values**2) * 1.94384
             except: f_wind = np.full(f_temp.shape, 5.0)
 
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
@@ -118,7 +122,7 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # Header Legend
+            # Legend positioning above the map
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
 
@@ -133,7 +137,8 @@ for cfg in MODEL_CONFIGS:
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
             gif_frames.append(imageio.imread(f_name))
-        except: continue
+        except Exception as e:
+            continue
     
     if gif_frames:
         imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_loop.gif"), gif_frames, fps=2, loop=0)
