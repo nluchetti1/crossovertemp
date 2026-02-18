@@ -79,7 +79,7 @@ rtma_vals = xover_grid.ravel()
 for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
-    for h_back in range(1, 12):
+    for h_back in range(1, 2):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
         try:
             H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False)
