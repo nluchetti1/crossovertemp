@@ -85,7 +85,6 @@ rtma_vals = xover_grid.ravel()
 
 for cfg in MODEL_CONFIGS:
     gif_frames = []
-    # Dynamic search for latest run (up to 6 hours back)
     found_init = None
     for h_back in range(1, 7):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
@@ -99,7 +98,7 @@ for cfg in MODEL_CONFIGS:
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 2):
+    for fxx in range(1, 13): # Increased range for a more useful GIF
         try:
             if cfg['model'] == 'nbm':
                 url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{found_init.strftime('%Y%m%d')}/{found_init.strftime('%H')}/core/blend.t{found_init.strftime('%H')}z.core.f{fxx:03d}.co.grib2"
@@ -131,10 +130,11 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # LEGEND ABOVE PLOT
-            plt.figtext(0.5, 0.94, 'Dense Fog (< 1/2 SM)     Mist (1-3 SM)', color='black', fontsize=14, fontweight='bold', ha='center')
-            plt.figtext(0.38, 0.94, '■', color='purple', fontsize=18)
-            plt.figtext(0.53, 0.94, '■', color='#E6AC00', fontsize=18) # Yellow Mist
+            # --- CONCISE TEXT-ONLY LEGEND (Upper Right) ---
+            ax.text(0.98, 0.97, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', 
+                    ha='right', va='top', transform=ax.transAxes)
+            ax.text(0.98, 0.93, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', 
+                    ha='right', va='top', transform=ax.transAxes)
 
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
@@ -142,8 +142,11 @@ for cfg in MODEL_CONFIGS:
 
             ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
             
-            plt.title(f"{cfg['id']} Fog Forecast | Init: {found_init.strftime('%H')}Z | Valid: {(found_init + timedelta(hours=fxx)).strftime('%HZ')}", loc='left', fontweight='bold', pad=25)
-            f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png") # Fixed naming for easy HTML access
+            # --- HEADER/TITLE ---
+            plt.title(f"{cfg['id']} Fog Forecast | Init: {found_init.strftime('%H')}Z | Valid: {(found_init + timedelta(hours=fxx)).strftime('%HZ')}", 
+                      loc='left', fontweight='bold', fontsize=14, pad=10)
+            
+            f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
             gif_frames.append(imageio.imread(f_name))
         except: continue
