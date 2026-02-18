@@ -21,15 +21,15 @@
 <body>
 <div class="wrapper">
     <h2>Multi-Model Crossover Fog Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Loading latest runs...</div>
+    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Syncing with NOAA Servers...</div>
 
     <div class="controls">
         <select id="model-select" onchange="changeModel()">
             <option value="HRRR">HRRR (3km)</option>
             <option value="RAP">RAP (13km)</option>
-            <option value="NBM_P25">NBM 25%</option>
-            <option value="NBM_P50">NBM 50%</option>
-            <option value="NBM_P75">NBM 75%</option>
+            <option value="NBM_P25">NBM 25% (Cool)</option>
+            <option value="NBM_P50">NBM 50% (Mean)</option>
+            <option value="NBM_P75">NBM 75% (Warm)</option>
         </select>
         <button class="btn-alt" onclick="setMode('analysis')">Analysis Map</button>
         <button onclick="setMode('forecast')">Forecasts</button>
