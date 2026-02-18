@@ -21,7 +21,7 @@
 <body>
 <div class="wrapper">
     <h2>Multi-Model Crossover Fog Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Syncing with NOAA Servers...</div>
+    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Scanning for latest data...</div>
 
     <div class="controls">
         <select id="model-select" onchange="changeModel()">
@@ -31,8 +31,8 @@
             <option value="NBM_P50">NBM 50% (Mean)</option>
             <option value="NBM_P75">NBM 75% (Warm)</option>
         </select>
-        <button class="btn-alt" onclick="setMode('analysis')">Analysis Map</button>
-        <button onclick="setMode('forecast')">Forecasts</button>
+        <button class="btn-alt" onclick="setMode('analysis')">Threshold Analysis</button>
+        <button onclick="setMode('forecast')">Forecast Maps</button>
         <button id="play-btn" class="btn-play" onclick="togglePlay()">Play Loop</button>
         <button onclick="saveGif()" style="background: #17a2b8;">Save as GIF</button>
     </div>
@@ -40,9 +40,9 @@
     <img id="map-frame" src="" alt="Fog Map">
 
     <div class="nav" id="nav-ui">
-        <button onclick="changeFrame(-1)">&#8592; Prev</button>
-        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 220px;">Hour: --</span>
-        <button onclick="changeFrame(1)">Next &#8594;</button>
+        <button onclick="changeFrame(-1)">&#8592; Prev Hour</button>
+        <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 200px;">Hour: --</span>
+        <button onclick="changeFrame(1)">Next Hour &#8594;</button>
     </div>
 
     <div class="logic-card">
@@ -55,13 +55,12 @@
 </div>
 
 <script>
-    let runId = null, frame = 1, mode = 'forecast', currentModel = 'HRRR', playing = false, timer = null;
+    let frame = 1, mode = 'forecast', currentModel = 'HRRR', playing = false, timer = null;
 
     async function start() {
         const r = await fetch(`images/current_status.json?v=${Date.now()}`);
         const d = await r.json();
-        runId = d.run_id;
-        document.getElementById('status-bar').innerText = `Init: ${d.model_init} | Updated: ${d.generated_at}`;
+        document.getElementById('status-bar').innerText = `Dashboard Updated: ${d.generated_at}`;
         setMode('forecast');
     }
 
@@ -78,14 +77,17 @@
     }
 
     function saveGif() { window.open(`images/fog_${currentModel}_loop.gif`, '_blank'); }
-    function changeModel() { currentModel = document.getElementById('model-select').value; update(); }
+    function changeModel() { currentModel = document.getElementById('model-select').value; frame = 1; update(); }
     function setMode(m) { mode = m; document.getElementById('nav-ui').style.display = (m === 'analysis') ? 'none' : 'flex'; update(); }
 
     function update() {
-        if (!runId) return;
-        const src = (mode === 'analysis') ? 'images/crossover_analysis.png' : `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
-        document.getElementById('map-frame').src = src;
-        document.getElementById('label').innerText = (mode === 'analysis') ? 'RTMA Analysis' : `${currentModel} Forecast | Hour: +${frame}`;
+        if (mode === 'analysis') {
+            document.getElementById('map-frame').src = `images/crossover_analysis.png?v=${Date.now()}`;
+        } else {
+            const frameStr = frame.toString().padStart(2, '0');
+            document.getElementById('map-frame').src = `images/fog_${currentModel}_f${frameStr}.png`;
+            document.getElementById('label').innerText = `${currentModel} Forecast | Hour: +${frame}`;
+        }
     }
 
     function changeFrame(d) {
