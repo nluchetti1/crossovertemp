@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, shutil, imageio.v2 as imageio
+import os, json, shutil, imageio.v2 as imageio, requests
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, UTC
 from herbie import Herbie
@@ -27,9 +27,9 @@ CITIES = [
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',  'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m'},
-    {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
-    {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
-    {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
+    {'id': 'NBM_P25', 'model': 'nbm', 'perc': '25'},
+    {'id': 'NBM_P50', 'model': 'nbm', 'perc': '50'},
+    {'id': 'NBM_P75', 'model': 'nbm', 'perc': '75'}
 ]
 
 def add_map_features(ax):
@@ -65,7 +65,7 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# RESTORED: Discrete 2-degree bins for Analysis
+# RESTORED: Discrete 2-degree bins for Crossover Analysis
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 82, 2)
@@ -81,7 +81,7 @@ for lon, lat, name in CITIES:
 plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
 
-# ================= 2. FORECAST & LOOP GENERATION =================
+# ================= 2. FORECAST & GIF GENERATION =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
 hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
@@ -92,12 +92,17 @@ for cfg in MODEL_CONFIGS:
     print(f"--- Processing {cfg['id']} ---")
     for fxx in range(1, 2):
         try:
-            # SWITCHED to NOMADS priority to break the S3 loop
-            H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, priority=['nomads', 'aws'], verbose=False)
-            
-            # Use direct file handle to prevent Errno 2
-            f_path = H_fcst.download(cfg['search'])
-            ds = xr.open_dataset(f_path, engine='cfgrib')
+            if cfg['model'] == 'nbm':
+                # Bypass Herbie subsetting for NBM to avoid path errors
+                url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{hrrr_init.strftime('%Y%m%d')}/{hrrr_init.strftime('%H')}/core/blend.t{hrrr_init.strftime('%H')}z.core.f{fxx:03d}.co.grib2"
+                f_path = f"nbm_temp.grib2"
+                r = requests.get(url, stream=True, timeout=30)
+                with open(f_path, 'wb') as f: shutil.copyfileobj(r.raw, f)
+                ds = xr.open_dataset(f_path, engine='cfgrib', filter_by_keys={'stepType': 'instant', 'level': 2, 'shortName': '2t'})
+            else:
+                H = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
+                ds_data = H.xarray(cfg['search'])
+                ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
@@ -111,7 +116,7 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # RESTORED: Upper right legend on ALL plots
+            # UNIFIED LEGEND: Added to all plots, including HRRR
             ax.text(0.98, 0.98, 'Dense Fog (< 1/2 SM)\nMist (1-3 SM)', transform=ax.transAxes, 
                     color='black', fontsize=12, fontweight='bold', ha='right', va='top', 
                     bbox=dict(facecolor='white', alpha=0.9, edgecolor='none'))
