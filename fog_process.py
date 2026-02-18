@@ -6,11 +6,12 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, shutil, imageio
+import os, json, imageio.v2 as imageio
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, UTC
 from herbie import Herbie
 import matplotlib.colors as mcolors
+import xarray as xr
 
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
@@ -64,18 +65,18 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# Plot Crossover Map with Identifiers
+# Plot Threshold Map with Restored Identifiers
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap='turbo', transform=ccrs.PlateCarree())
 plt.colorbar(mesh, ax=ax, shrink=0.8, label='°F')
 for lon, lat, name in CITIES:
-    ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-    ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
+    ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
+    ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=11, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
 
-# ================= 2. FORECAST & GIF LOOP =================
+# ================= 2. FORECAST & GIF GENERATION =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
 hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
@@ -84,14 +85,12 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 for cfg in MODEL_CONFIGS:
     gif_frames = []
     print(f"--- Processing {cfg['id']} ---")
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             
-            # FIXED: Avoid string pattern error by opening local file directly for NBM
-            if cfg['model'] == 'nbm':
+            if cfg['model'] in ['nbm', 'rap']:
                 f_path = H_fcst.download(cfg['search'])
-                import xarray as xr
                 ds = xr.open_dataset(f_path, engine='cfgrib')
             else:
                 ds_data = H_fcst.xarray(cfg['search'])
@@ -108,19 +107,29 @@ for cfg in MODEL_CONFIGS:
 
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
-            for lon, lat, name in CITIES:
-                ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                ax.text(lon + 0.06, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
+            
+            # RESTORED LEGEND IN UPPER RIGHT
+            ax.text(0.98, 0.98, 'Dense Fog (< 1/2 SM)\nMist (1-3 SM)', transform=ax.transAxes, 
+                    color='purple', fontsize=12, fontweight='bold', ha='right', va='top', 
+                    bbox=dict(facecolor='white', alpha=0.9, edgecolor='none'))
+            # Visual marker for legend
+            ax.text(0.98, 0.94, '      ', transform=ax.transAxes, backgroundcolor='gold', ha='right')
+            ax.text(0.98, 0.97, '      ', transform=ax.transAxes, backgroundcolor='purple', ha='right')
 
-            ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), vmin=0, vmax=2, alpha=0.8)
-            plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {(hrrr_init + timedelta(hours=fxx)).strftime('%HZ')}", loc='left', fontweight='bold')
+            for lon, lat, name in CITIES:
+                ax.plot(lon, lat, 'ko', transform=ccrs.PlateCarree())
+                ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+
+            ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
+                          transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), alpha=0.8)
+            
+            plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z", loc='left', fontweight='bold')
             
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
-            gif_frames.append(imageio.v2.imread(f_name))
+            gif_frames.append(imageio.imread(f_name))
         except: continue
     
-    # Save the model GIF
     if gif_frames:
         imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_loop.gif"), gif_frames, fps=2, loop=0)
 
