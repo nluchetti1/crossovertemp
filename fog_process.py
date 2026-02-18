@@ -111,7 +111,7 @@ for cfg in MODEL_CONFIGS:
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **herbie_kwargs)
             ds_data = H_fcst.xarray(cfg['search'])
