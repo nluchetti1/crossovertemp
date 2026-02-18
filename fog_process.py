@@ -23,10 +23,9 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# UPDATED: Corrected RAP product and refined NBM search strings
 MODEL_CONFIGS = [
-    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m'},
-    {'id': 'RAP',  'model': 'rap',  'prod': 'wrfprs', 'search': ':(TMP):2 m'},
+    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'wrfprs', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
     {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
     {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
@@ -74,23 +73,31 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"--- Attempting {cfg['id']} ---")
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
-            # FIXED: NBM and RAP often require explicitly downloading the subset before opening
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
+            # FIXED: Engine parameter is only for the .xarray() method
             ds_data = H_fcst.xarray(cfg['search'], engine='cfgrib')
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
-            # Robust variable identification
-            t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
-            
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+            
+            # Identify Surface Temp
+            t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
+            # Stability Filter: Check for 925mb winds (Proxy 5kts if missing in NBM)
+            try:
+                u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
+                f_wind = np.sqrt(u**2 + v**2) * 1.94384
+            except:
+                f_wind = np.full(f_temp.shape, 5.0)
+
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             fog = np.zeros_like(f_temp)
-            fog[(f_temp <= f_thresh)] = 1
-            fog[(f_temp <= (f_thresh - 3.0))] = 2
+            # Apply Logic
+            fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
+            fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
@@ -106,7 +113,7 @@ for cfg in MODEL_CONFIGS:
             plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
             plt.close()
-            print(f"  Successfully processed {cfg['id']} F{fxx:02d}")
+            print(f"  Processed {cfg['id']} F{fxx:02d}")
         except Exception as e:
             print(f"  Error on {cfg['id']} F{fxx}: {e}")
             continue
