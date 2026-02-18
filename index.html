@@ -27,8 +27,7 @@
         <select id="model-select" onchange="changeModel()">
             <option value="HRRR">HRRR (3km)</option>
             <option value="RAP">RAP (13km)</option>
-            <option value="NamNest">NamNest (3km)</option>
-            <option value="HREF">HREF Mean (Ensemble)</option>
+            <option value="NDFD">NDFD (Operational)</option>
         </select>
         <button class="btn-alt" onclick="setMode('analysis')">Threshold Analysis</button>
         <button onclick="setMode('forecast')">Forecast Maps</button>
@@ -47,7 +46,7 @@
     <div class="logic-card">
         <strong>Implementation Logic:</strong><br>
         1. <strong>Crossover Identification:</strong> Forecast triggers when model surface temperature (T) falls to or below <strong>T<sub>xover</sub></strong> (the RTMA dew point at peak heating).<br>
-        2. <strong>925 mb Stability Filter:</strong> Radiation fog is suppressed if winds exceed 15 kts, indicating insufficient stability for cooling.<br>
+        2. <strong>Stability Filter:</strong> Radiation fog suppressed if winds > 15 kts (HRRR/RAP). NDFD assumes calm winds.<br>
         &nbsp;&nbsp;&nbsp;&bull; <span style="color: #b8860b; font-weight: bold;">Mist (Yellow):</span> Visibility 1-3 SM (T &le; T<sub>xover</sub>).<br>
         &nbsp;&nbsp;&nbsp;&bull; <span style="color: #800080; font-weight: bold;">Dense Fog (Purple):</span> Visibility &lt; 1/2 SM (T &le; T<sub>xover</sub> - 3°F).
     </div>
