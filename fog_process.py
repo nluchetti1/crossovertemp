@@ -24,7 +24,6 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# HREF and NamNest require specific products and domains
 MODEL_CONFIGS = [
     {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
     {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
@@ -39,7 +38,7 @@ def add_map_features(ax):
     counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', scale='10m', facecolor='none')
     ax.add_feature(counties, edgecolor='black', linewidth=0.4, alpha=0.5)
 
-# ================= 1. RTMA ANALYSIS =================
+# ================= 1. RTMA ANALYSIS (Discrete 2° Bins) =================
 now = datetime.now(UTC).replace(tzinfo=None)
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
@@ -65,6 +64,24 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
+# Plotting Analysis with 2-degree discrete color bar
+fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
+add_map_features(ax)
+
+levels = np.arange(20, 82, 2)
+cmap = plt.cm.turbo
+norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
+
+mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='°F')
+
+for lon, lat, name in CITIES:
+    ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
+    ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
+
+plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
+plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
+
 # ================= 2. FORECAST GENERATION =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
@@ -73,17 +90,13 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
-    # Logic to prioritize the most recent run based on model frequency
     search_hours = 24 if cfg['freq'] == 'synoptic' else 6
     extra_kwargs = {k: v for k, v in cfg.items() if k == 'domain'}
     
     for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
-        
-        # Ensure synoptic models only attempt 00, 06, 12, or 18Z
         if cfg['freq'] == 'synoptic' and check_time.hour % 6 != 0:
             continue
-            
         try:
             H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **extra_kwargs)
             if H_test.grib: 
@@ -91,13 +104,10 @@ for cfg in MODEL_CONFIGS:
                 break
         except: continue
     
-    if not found_init: 
-        print(f"Skipping {cfg['id']}: No recent data found.")
-        continue
-        
+    if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **extra_kwargs)
             ds_data = H_fcst.xarray(cfg['search'])
@@ -107,7 +117,6 @@ for cfg in MODEL_CONFIGS:
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # 925 mb Stability Mask Logic
             try:
                 u_key = [v for v in ds.data_vars if 'u' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
                 v_key = [v for v in ds.data_vars if 'v' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
@@ -122,7 +131,7 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # Legend positioning above the map
+            # Legend text-only above plot area
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
 
@@ -137,8 +146,7 @@ for cfg in MODEL_CONFIGS:
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
             gif_frames.append(imageio.imread(f_name))
-        except Exception as e:
-            continue
+        except: continue
     
     if gif_frames:
         imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_loop.gif"), gif_frames, fps=2, loop=0)
