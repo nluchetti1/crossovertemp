@@ -20,7 +20,7 @@
 <body>
 <div class="wrapper">
     <h2>Multi-Model Crossover Fog Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Loading...</div>
+    <div id="status-bar" style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Syncing with NOAA Servers...</div>
 
     <div class="controls">
         <select id="model-select" onchange="changeModel()">
@@ -30,7 +30,7 @@
             <option value="NBM_P50">NBM 50% (Mean)</option>
             <option value="NBM_P75">NBM 75% (Warm)</option>
         </select>
-        <button class="btn-alt" onclick="setMode('analysis')">Threshold Analysis</button>
+        <button class="btn-alt" onclick="setMode('analysis')">Analysis Map</button>
         <button onclick="setMode('forecast')">Forecasts</button>
         <button id="play-btn" class="btn-play" onclick="togglePlay()">Play Loop</button>
         <button onclick="saveGif()" style="background: #17a2b8;">Save as GIF</button>
@@ -69,6 +69,7 @@
     }
 
     function saveGif() {
+        // This links directly to the nightly generated loop
         window.open(`images/fog_${currentModel}_loop.gif`, '_blank');
     }
 
