@@ -67,7 +67,7 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"Starting loop for {cfg['id']}...")
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             ds_list = H_fcst.xarray(cfg['search'])
