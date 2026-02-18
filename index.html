@@ -9,80 +9,66 @@
         .wrapper { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap; }
         select, button { padding: 12px 15px; border-radius: 6px; border: 1px solid #ccc; font-weight: bold; cursor: pointer; }
-        button { background: #5d469f; color: white; border: none; transition: 0.2s; }
-        button:hover { background: #483582; }
+        button { background: #5d469f; color: white; border: none; }
         .btn-alt { background: #495057; }
-        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; min-height: 400px; }
+        #map-frame { width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; }
         .nav { margin-top: 15px; background: #eee; padding: 15px; border-radius: 8px; display: flex; justify-content: center; align-items: center; }
-        .logic-card { text-align: left; font-size: 0.95em; background: #fdfdfe; border-left: 5px solid #5d469f; padding: 20px; margin-top: 25px; color: #333; line-height: 1.6; }
-        .color-key { font-weight: bold; }
-        .yellow { color: #b8860b; }
-        .purple { color: #800080; }
-        .footer-link { margin-top: 20px; font-size: 0.8em; color: #666; }
-        .footer-link a { color: #5d469f; text-decoration: none; font-weight: bold; }
     </style>
 </head>
 <body>
 <div class="wrapper">
     <h2>Multi-Model Crossover Fog Dashboard</h2>
-    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 15px;">Loading latest data...</div>
+    <div id="status-bar" style="font-size: 0.85em; color: #666; margin-bottom: 15px;">Loading...</div>
 
     <div class="controls">
-        <label for="model-select">Model Source:</label>
         <select id="model-select" onchange="changeModel()">
             <option value="HRRR">HRRR (3km)</option>
             <option value="RAP">RAP (13km)</option>
-            <option value="NBM_P25">NBM 25th% (Ensemble Cool)</option>
-            <option value="NBM_P50">NBM 50th% (Ensemble Mean)</option>
-            <option value="NBM_P75">NBM 75th% (Ensemble Warm)</option>
+            <option value="NBM_P25">NBM 25th%</option>
+            <option value="NBM_P50">NBM 50th%</option>
+            <option value="NBM_P75">NBM 75th%</option>
         </select>
-        <button class="btn-alt" onclick="setMode('analysis')">View Threshold Map</button>
-        <button onclick="setMode('forecast')">View Forecast Loop</button>
+        <button class="btn-alt" onclick="setMode('analysis')">Threshold Map</button>
+        <button onclick="setMode('forecast')">Forecasts</button>
+        <button id="play-btn" onclick="togglePlay()" style="background: #28a745;">Play Loop</button>
+        <button onclick="saveGif()" style="background: #17a2b8;">Save as GIF</button>
     </div>
 
-    <img id="map-frame" src="" alt="Fog Map Content">
+    <img id="map-frame" src="" alt="Fog Map">
 
     <div class="nav" id="nav-ui">
         <button onclick="changeFrame(-1)">&#8592; Prev</button>
         <span id="label" style="margin: 0 20px; font-weight: bold; min-width: 220px; display: inline-block;">Hour: --</span>
         <button onclick="changeFrame(1)">Next &#8594;</button>
     </div>
-
-    <div class="logic-card">
-        <strong>Combo Technique Implementation:</strong><br><br>
-        1. <strong>Crossover Identification:</strong> Forecast triggers when the model surface temperature (<strong>T</strong>) falls to or below the crossover temperature (<strong>T<sub>xover</sub></strong>). <strong>T<sub>xover</sub></strong> is the dew point recorded by RTMA at peak daytime heating.<br><br>
-        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key yellow">Mist (Yellow):</span> Forecasted when <strong>T &le; T<sub>xover</sub></strong> (Visibility: 1-3 SM).<br>
-        &nbsp;&nbsp;&nbsp;&bull; <span class="color-key purple">Dense Fog (Purple):</span> Forecasted when <strong>T &le; T<sub>xover</sub> - 3&deg;F</strong> (Visibility: &lt; 1/2 SM).<br><br>
-        2. <strong>Stability Filter (925mb Winds):</strong> Forecast is suppressed if 925mb winds are <strong>&gt; 15 knots</strong>. (NBM Percentiles use HRRR proxy winds for this filter).<br><br>
-        3. <strong>Ensemble Approach:</strong> Comparing high-resolution deterministic (HRRR/RAP) against NBM percentiles provides a "confidence bound" for fog coverage.
-    </div>
-
-    <div class="footer-link">
-        Field Access: <a href="https://nluchetti1.github.io/crossovertemp/" target="_blank">nluchetti1.github.io/crossovertemp/</a>
-    </div>
 </div>
 
 <script>
-    let runId = null, frame = 1, mode = 'forecast', currentModel = 'HRRR';
+    let runId = null, frame = 1, mode = 'forecast', currentModel = 'HRRR', playing = false, timer = null;
 
     async function start() {
-        try {
-            const r = await fetch(`images/current_status.json?v=${Date.now()}`);
-            const d = await r.json();
-            runId = d.run_id;
-            document.getElementById('status-bar').innerText = `Init: ${d.model_init} | Updated: ${d.generated_at}`;
-            setMode('forecast');
-        } catch (e) {
-            document.getElementById('status-bar').innerText = "Error loading status. Check GitHub Actions.";
+        const r = await fetch(`images/current_status.json?v=${Date.now()}`);
+        const d = await r.json();
+        runId = d.run_id;
+        document.getElementById('status-bar').innerText = `Init: ${d.model_init} | Updated: ${d.generated_at}`;
+        setMode('forecast');
+    }
+
+    function togglePlay() {
+        playing = !playing;
+        const btn = document.getElementById('play-btn');
+        if (playing) {
+            btn.innerText = "Pause"; btn.style.background = "#dc3545";
+            timer = setInterval(() => changeFrame(1), 800);
+        } else {
+            btn.innerText = "Play Loop"; btn.style.background = "#28a745";
+            clearInterval(timer);
         }
     }
 
-    // SYNC VIEW: Changing model preserves the current frame (hour)
     function changeModel() {
         currentModel = document.getElementById('model-select').value;
-        if (mode === 'forecast') {
-            update();
-        }
+        update();
     }
 
     function setMode(m) {
@@ -98,16 +84,19 @@
 
     function update() {
         if (!runId || mode === 'analysis') return;
-        const imgPath = `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
-        document.getElementById('map-frame').src = imgPath;
+        document.getElementById('map-frame').src = `images/fog_${currentModel}_${runId}_f${frame.toString().padStart(2, '0')}.png`;
         document.getElementById('label').innerText = `${currentModel} | Hour: +${frame}`;
     }
 
     function changeFrame(d) {
         frame += d;
-        if (frame > 18) frame = 1; 
-        if (frame < 1) frame = 18;
+        if (frame > 18) frame = 1; if (frame < 1) frame = 18;
         update();
+    }
+
+    // High-value next step: This generates a GIF using the browser's current images
+    function saveGif() {
+        alert("GIF creation requires a server-side build or an external library like gif.js. Would you like me to add a Python GIF-maker to your nightly cron instead?");
     }
 
     start();
