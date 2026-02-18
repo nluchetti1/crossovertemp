@@ -1,4 +1,5 @@
 import warnings
+# Suppress specific xarray/cfgrib merge warnings and Herbie regex alerts
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -8,7 +9,7 @@ import cartopy.feature as cfeature
 import numpy as np
 import os, json, glob, imageio.v2 as imageio
 from scipy.interpolate import griddata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from herbie import Herbie
 import matplotlib.colors as mcolors
 
@@ -39,12 +40,18 @@ def add_map_features(ax):
     ax.add_feature(counties, edgecolor='black', linewidth=0.4, alpha=0.5)
 
 # ================= 1. DYNAMIC CROSSOVER LOGIC =================
-now = datetime.utcnow()
+# Fixed DeprecationWarning by using timezone-aware UTC now
+now = datetime.now(UTC).replace(tzinfo=None) 
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
 
+print(f"Running RTMA Analysis for {ref_time}")
 H_init = Herbie(ref_time, model='rtma', product='anl')
-ds_init = H_init.xarray(":(TMP|DPT):2 m")[0]
+ds_init = H_init.xarray(":(TMP|DPT):2 m")
+
+# FIXED: Handle case where Herbie returns a single Dataset instead of a list
+if isinstance(ds_init, list): ds_init = ds_init[0]
+
 if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
 lons_rtma, lats_rtma = ds_init.longitude.values, ds_init.latitude.values
 max_t_grid, xover_grid = np.full(lons_rtma.shape, -999.0), np.full(lons_rtma.shape, -999.0)
@@ -53,7 +60,8 @@ for i in range(12):
     t = ref_time - timedelta(hours=i)
     try:
         H = Herbie(t, model='rtma', product='anl', verbose=False)
-        ds = H.xarray(":(TMP|DPT):2 m")[0]
+        ds = H.xarray(":(TMP|DPT):2 m")
+        if isinstance(ds, list): ds = ds[0]
         t_f, d_f = (ds['t2m'].values - 273.15) * 9/5 + 32, (ds['d2m'].values - 273.15) * 9/5 + 32
         mask = t_f > max_t_grid
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
@@ -67,18 +75,17 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"Starting loop for {cfg['id']}...")
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            ds_list = H_fcst.xarray(cfg['search'])
-            ds = ds_list[0] if isinstance(ds_list, list) else ds_list
+            ds_data = H_fcst.xarray(cfg['search'])
+            ds = ds_data[0] if isinstance(ds_data, list) else ds_data
+            
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
-            # Surface Temp extraction
             t_var = 't2m' if 't2m' in ds else list(ds.data_vars)[0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Wind logic: NBM/RAP fallback to 5kts if 925mb wind not found
             f_wind = np.full(f_temp.shape, 5.0) 
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             
@@ -89,7 +96,6 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # RE-ADDED CITY DOTS AND LABELS
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
                 x_off = -0.06 if name == 'KINT' else 0.06
@@ -104,9 +110,7 @@ for cfg in MODEL_CONFIGS:
             plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
             plt.close()
-        except Exception as e:
-            print(f"Skipping {cfg['id']} F{fxx}: {e}")
-            continue
+        except: continue
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
