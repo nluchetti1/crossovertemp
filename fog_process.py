@@ -24,12 +24,13 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
+# UPDATED: Using specific GRIB data types for NBM percentiles
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',  'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'NBM_P25', 'model': 'nbm', 'perc': '25'},
-    {'id': 'NBM_P50', 'model': 'nbm', 'perc': '50'},
-    {'id': 'NBM_P75', 'model': 'nbm', 'perc': '75'}
+    {'id': 'NBM_P25', 'model': 'nbm', 'grib_key': 'p25'},
+    {'id': 'NBM_P50', 'model': 'nbm', 'grib_key': 'p50'},
+    {'id': 'NBM_P75', 'model': 'nbm', 'grib_key': 'p75'}
 ]
 
 def add_map_features(ax):
@@ -65,7 +66,7 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# Plot Analysis with discrete bins
+# Plot analysis with discrete bins
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 82, 2)
@@ -79,7 +80,7 @@ for lon, lat, name in CITIES:
 plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
 
-# ================= 2. FORECAST & STABILITY LOOP =================
+# ================= 2. FORECAST GENERATION =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
 hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
@@ -94,8 +95,11 @@ for cfg in MODEL_CONFIGS:
                 url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{hrrr_init.strftime('%Y%m%d')}/{hrrr_init.strftime('%H')}/core/blend.t{hrrr_init.strftime('%H')}z.core.f{fxx:03d}.co.grib2"
                 f_path = f"nbm_temp.grib2"
                 r = requests.get(url, stream=True, timeout=30)
-                with open(f_path, 'wb') as f: shutil.copyfileobj(r.raw, f)
-                ds = xr.open_dataset(f_path, engine='cfgrib', filter_by_keys={'stepType': 'instant', 'level': 2, 'shortName': '2t'})
+                if r.status_code == 200:
+                    with open(f_path, 'wb') as f: shutil.copyfileobj(r.raw, f)
+                    # UPDATED: Differentiation of NBM percentiles
+                    ds = xr.open_dataset(f_path, engine='cfgrib', filter_by_keys={'stepType': 'instant', 'level': 2, 'dataType': cfg['grib_key']})
+                else: continue
             else:
                 H = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
                 ds_data = H.xarray(cfg['search'])
@@ -114,22 +118,23 @@ for cfg in MODEL_CONFIGS:
 
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             fog = np.zeros_like(f_temp)
-            # Thresholding + Wind Constraint
             fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
             fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
             fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
-            ax.text(0.98, 0.98, 'Dense Fog (< 1/2 SM)\nMist (1-3 SM)', transform=ax.transAxes, color='black', fontsize=12, fontweight='bold', ha='right', va='top', bbox=dict(facecolor='white', alpha=0.9, edgecolor='none'))
-            ax.text(0.98, 0.94, '      ', transform=ax.transAxes, backgroundcolor='gold', ha='right')
-            ax.text(0.98, 0.97, '      ', transform=ax.transAxes, backgroundcolor='purple', ha='right')
+            
+            # UPDATED: Header-style legend in upper right
+            ax.text(0.98, 0.98, 'Dense Fog (< 1/2 SM)', transform=ax.transAxes, color='purple', fontsize=13, fontweight='bold', ha='right', va='top')
+            ax.text(0.98, 0.94, 'Mist (1-3 SM)', transform=ax.transAxes, color='#E6AC00', fontsize=13, fontweight='bold', ha='right', va='top')
 
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 
             ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), alpha=0.8)
             plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z", loc='left', fontweight='bold')
+            
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
             gif_frames.append(imageio.imread(f_name))
