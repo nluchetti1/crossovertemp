@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, shutil, imageio
+import os, json, shutil, imageio.v2 as imageio
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, UTC
 from herbie import Herbie
@@ -65,10 +65,10 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# RESTORED: Discrete 2-degree bins for colorbar
+# RESTORED: Discrete 2-degree bins and Airport IDs
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
-levels = np.arange(20, 80, 2)
+levels = np.arange(20, 82, 2)
 cmap = plt.cm.turbo
 norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
 
@@ -94,7 +94,9 @@ for cfg in MODEL_CONFIGS:
     for fxx in range(1, 2):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            if cfg['model'] in ['nbm', 'rap']:
+            
+            # FIXED: Download NBM locally first to prevent Errno 2
+            if cfg['model'] == 'nbm':
                 f_path = H_fcst.download(cfg['search'])
                 ds = xr.open_dataset(f_path, engine='cfgrib')
             else:
@@ -129,9 +131,10 @@ for cfg in MODEL_CONFIGS:
             
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
-            gif_frames.append(imageio.v2.imread(f_name))
+            gif_frames.append(imageio.imread(f_name))
         except: continue
     
+    # Save GIF for the webpage
     if gif_frames:
         imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_loop.gif"), gif_frames, fps=2, loop=0)
 
