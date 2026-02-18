@@ -68,7 +68,8 @@ for i in range(12):
 # ================= 2. FORECAST LOOP =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
-# Using 3 hours ago to ensure NBM availability
+
+# Using a 3-hour offset for the NBM, which has slower processing times than HRRR
 hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
@@ -78,16 +79,18 @@ for cfg in MODEL_CONFIGS:
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             
-            # SOLUTION: Force a physical download of the subset to resolve Errno 2
-            H_fcst.download(cfg['search'])
-            ds_data = H_fcst.xarray(cfg['search'])
+            # FIXED: Force a local download for NBM to resolve Errno 2
+            if cfg['model'] == 'nbm':
+                H_fcst.download(cfg['search'])
             
+            ds_data = H_fcst.xarray(cfg['search'])
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
+            # Stability Filter
             try:
                 u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
                 f_wind = np.sqrt(u**2 + v**2) * 1.94384
@@ -119,3 +122,8 @@ for cfg in MODEL_CONFIGS:
 
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
+
+# CLEANUP: Remove local GRIB data after processing to prevent disk bloat
+data_path = os.path.expanduser('~/data')
+if os.path.exists(data_path):
+    shutil.rmtree(data_path, ignore_errors=True)
