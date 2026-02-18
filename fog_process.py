@@ -24,11 +24,11 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# Updated Model List: HRRR, RAP, NamNest, HREF
+# Refined configs: NamNest and HREF often need specific product strings
 MODEL_CONFIGS = [
     {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):10 m'}, # NamNest uses 10m for sfc winds in some prods
+    {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'}
 ]
 
@@ -39,7 +39,7 @@ def add_map_features(ax):
     counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', scale='10m', facecolor='none')
     ax.add_feature(counties, edgecolor='black', linewidth=0.4, alpha=0.5)
 
-# ================= 1. RTMA ANALYSIS (Peak Heating Baseline) =================
+# ================= 1. RTMA ANALYSIS =================
 now = datetime.now(UTC).replace(tzinfo=None)
 ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
 if ref_time > now: ref_time -= timedelta(days=1)
@@ -65,21 +65,18 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# Save the Analysis Map
-fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
-add_map_features(ax)
-mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap='turbo', transform=ccrs.PlateCarree())
-plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
-plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
-
-# ================= 2. FORECAST GENERATION (18-Hour Loop) =================
+# ================= 2. FORECAST GENERATION =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
 
 for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
-    for h_back in range(1, 2):
+    
+    # NamNest/HREF run 00, 06, 12, 18Z. We search back 18 hours to ensure we catch one.
+    search_hours = 18 if cfg['id'] in ['NamNest', 'HREF'] else 6
+    
+    for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
         try:
             H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False)
@@ -88,19 +85,23 @@ for cfg in MODEL_CONFIGS:
                 break
         except: continue
     
-    if not found_init: continue
-    print(f"--- Processing {cfg['id']} ---")
+    if not found_init: 
+        print(f"Skipping {cfg['id']}: No data found in the last {search_hours} hours.")
+        continue
+        
+    print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            ds = H_fcst.xarray(cfg['search'])
-            if isinstance(ds, list): ds = ds[0]
+            ds_data = H_fcst.xarray(cfg['search'])
+            ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
+            # Universal wind key finder for 925mb
             try:
                 u = [v for v in ds.data_vars if 'u' in v.lower()][0]
                 v = [v for v in ds.data_vars if 'v' in v.lower()][0]
@@ -115,13 +116,13 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # --- CONCISE TEXT LEGEND ABOVE PLOT ---
+            # Legend above plot area
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
 
             for lon, lat, name in CITIES:
                 ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                ax.text(lon+0.05, lat+0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+                ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 
             ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
             
