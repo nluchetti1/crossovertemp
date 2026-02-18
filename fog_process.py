@@ -24,11 +24,12 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
+# HREF strictly requires domain='conus'
 MODEL_CONFIGS = [
     {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
     {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
     {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic'},
-    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic', 'domain': 'conus'}
+    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'domain': 'conus', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic'}
 ]
 
 def add_map_features(ax):
@@ -64,10 +65,10 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# Plotting Analysis with 2-degree discrete color bar
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 
+# Discrete 2-degree bins as requested
 levels = np.arange(20, 82, 2)
 cmap = plt.cm.turbo
 norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
@@ -90,15 +91,18 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
+    # Priority search: 6 hours for hourly, 24 hours for synoptic (00, 06, 12, 18Z)
     search_hours = 24 if cfg['freq'] == 'synoptic' else 6
-    extra_kwargs = {k: v for k, v in cfg.items() if k == 'domain'}
+    
+    # Pack domain arg if present
+    herbie_kwargs = {k: cfg[k] for k in ['domain'] if k in cfg}
     
     for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
         if cfg['freq'] == 'synoptic' and check_time.hour % 6 != 0:
             continue
         try:
-            H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **extra_kwargs)
+            H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **herbie_kwargs)
             if H_test.grib: 
                 found_init = check_time
                 break
@@ -107,9 +111,9 @@ for cfg in MODEL_CONFIGS:
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
-            H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **extra_kwargs)
+            H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **herbie_kwargs)
             ds_data = H_fcst.xarray(cfg['search'])
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
@@ -131,7 +135,7 @@ for cfg in MODEL_CONFIGS:
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
             
-            # Legend text-only above plot area
+            # Upper Right Concise Legend
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
 
