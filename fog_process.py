@@ -24,12 +24,12 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
-# HREF strictly requires domain='conus'
+# NDFD and HREF will use manual NOMADS URL logic
 MODEL_CONFIGS = [
-    {'id': 'HRRR',    'model': 'hrrr', 'prod': 'sfc',        'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
-    {'id': 'RAP',     'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly'},
-    {'id': 'NamNest', 'model': 'nam',  'prod': 'conusnest',  'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic'},
-    {'id': 'HREF',    'model': 'href', 'prod': 'mean',       'domain': 'conus', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'synoptic'}
+    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly', 'method': 'herbie'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb', 'freq': 'hourly', 'method': 'herbie'},
+    {'id': 'NDFD', 'model': 'ndfd', 'prod': 'conus', 'freq': 'synoptic', 'method': 'nomads_ndfd'},
+    {'id': 'HREF', 'model': 'href', 'prod': 'mean', 'domain': 'conus', 'freq': 'synoptic', 'method': 'nomads_href'}
 ]
 
 def add_map_features(ax):
@@ -67,19 +67,11 @@ for i in range(12):
 
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
-
-# Discrete 2-degree bins as requested
 levels = np.arange(20, 82, 2)
 cmap = plt.cm.turbo
 norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-
 mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
 plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='°F')
-
-for lon, lat, name in CITIES:
-    ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-    ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, pad=1))
-
 plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight'); plt.close()
 
@@ -90,63 +82,68 @@ rtma_vals = xover_grid.ravel()
 for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
-    
-    # Priority search: 6 hours for hourly, 24 hours for synoptic (00, 06, 12, 18Z)
     search_hours = 24 if cfg['freq'] == 'synoptic' else 6
-    
-    # Pack domain arg if present
-    herbie_kwargs = {k: cfg[k] for k in ['domain'] if k in cfg}
     
     for h_back in range(0, search_hours + 1):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
-        if cfg['freq'] == 'synoptic' and check_time.hour % 6 != 0:
-            continue
-        try:
-            H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False, **herbie_kwargs)
-            if H_test.grib: 
+        if cfg['method'] == 'herbie':
+            try:
+                H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False)
+                if H_test.grib: 
+                    found_init = check_time
+                    break
+            except: continue
+        else:
+            # Manual NOMADS URL Check
+            d_s, h_s = check_time.strftime('%Y%m%d'), check_time.strftime('%H')
+            if cfg['method'] == 'nomads_href':
+                url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{d_s}/{h_s}/ensmean/href.t{h_s}z.conus.mean.f01.grib2"
+            else: # NDFD conus
+                url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{d_s}/ds.temp.bin"
+            
+            if requests.head(url, timeout=5).status_code == 200:
                 found_init = check_time
                 break
-        except: continue
-    
+
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
-            H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False, **herbie_kwargs)
-            ds_data = H_fcst.xarray(cfg['search'])
-            ds = ds_data[0] if isinstance(ds_data, list) else ds_data
-            
+            temp_grib = f"temp_{cfg['id']}.grib2"
+            if cfg['method'] == 'herbie':
+                H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
+                ds = H_fcst.xarray(cfg['search'])
+                if isinstance(ds, list): ds = ds[0]
+            else:
+                d_s, h_s = found_init.strftime('%Y%m%d'), found_init.strftime('%H')
+                if cfg['method'] == 'nomads_href':
+                    url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{d_s}/{h_s}/ensmean/href.t{h_s}z.conus.mean.f{fxx:02d}.grib2"
+                else: # NDFD uses a multi-hour flat file; herbie or direct grib filter is needed
+                    H_ndfd = Herbie(found_init, model='ndfd', product='conus', fxx=fxx)
+                    ds = H_ndfd.xarray(":(TMP):2 m")
+                
+                if cfg['method'] != 'nomads_ndfd':
+                    r = requests.get(url, stream=True); r.raw.decode_content = True
+                    with open(temp_grib, 'wb') as f: shutil.copyfileobj(r.raw, f)
+                    ds = xr.open_dataset(temp_grib, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            try:
-                u_key = [v for v in ds.data_vars if 'u' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
-                v_key = [v for v in ds.data_vars if 'v' in v.lower() and ('925' in str(v) or 'grd' in str(v).lower())][0]
-                f_wind = np.sqrt(ds[u_key].values**2 + ds[v_key].values**2) * 1.94384
-            except: f_wind = np.full(f_temp.shape, 5.0)
-
+            # Mask logic
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             fog = np.zeros_like(f_temp)
-            fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
-            fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
+            fog[(f_temp <= f_thresh)] = 1
+            fog[(f_temp <= (f_thresh - 3.0))] = 2
 
             fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
-            
-            # Upper Right Concise Legend
             ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
             ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=12, fontweight='bold', ha='right', transform=ax.transAxes)
-
-            for lon, lat, name in CITIES:
-                ax.plot(lon, lat, 'ko', markersize=5, transform=ccrs.PlateCarree())
-                ax.text(lon + 0.05, lat + 0.05, name, transform=ccrs.PlateCarree(), fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
-
             ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
-            
-            plt.title(f"{cfg['id']} Fog Forecast | Init: {found_init.strftime('%H')}Z | Valid: {(found_init + timedelta(hours=fxx)).strftime('%HZ')}", loc='left', fontweight='bold', fontsize=14, pad=10)
-            
+            plt.title(f"{cfg['id']} Forecast | Init: {found_init.strftime('%H')}Z | Valid: F{fxx:02d}", loc='left', fontweight='bold')
             f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_f{fxx:02d}.png")
             plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
             gif_frames.append(imageio.imread(f_name))
