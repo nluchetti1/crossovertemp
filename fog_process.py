@@ -99,7 +99,7 @@ for cfg in MODEL_CONFIGS:
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             if cfg['model'] == 'nbm':
                 url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{found_init.strftime('%Y%m%d')}/{found_init.strftime('%H')}/core/blend.t{found_init.strftime('%H')}z.core.f{fxx:03d}.co.grib2"
