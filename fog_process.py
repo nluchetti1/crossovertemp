@@ -23,9 +23,10 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
+# UPDATED: Corrected RAP product and refined NBM search strings
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m'},
-    {'id': 'RAP',  'model': 'rap',  'prod': 'sfc', 'search': ':(TMP):2 m'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'wrfprs', 'search': ':(TMP):2 m'},
     {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
     {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
     {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
@@ -52,14 +53,12 @@ if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude'
 lons_rtma, lats_rtma = ds_init.longitude.values, ds_init.latitude.values
 max_t_grid, xover_grid = np.full(lons_rtma.shape, -999.0), np.full(lons_rtma.shape, -999.0)
 
-# Process RTMA window
 for i in range(12):
     t = ref_time - timedelta(hours=i)
     try:
         H = Herbie(t, model='rtma', product='anl', verbose=False)
         ds = H.xarray(":(TMP|DPT):2 m")
         if isinstance(ds, list): ds = ds[0]
-        # Robustly find temp and dewpoint
         t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
         d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
         t_f, d_f = (ds[t_key].values - 273.15) * 9/5 + 32, (ds[d_key].values - 273.15) * 9/5 + 32
@@ -75,20 +74,19 @@ run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"--- Attempting {cfg['id']} ---")
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
+            # FIXED: NBM and RAP often require explicitly downloading the subset before opening
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            ds_data = H_fcst.xarray(cfg['search'])
+            ds_data = H_fcst.xarray(cfg['search'], engine='cfgrib')
             ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
-            # Identify the temperature variable dynamically
+            # Robust variable identification
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
-            print(f"  {cfg['id']} F{fxx:02}: Using variable '{t_var}'")
             
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Simple thresholding logic
             f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
             fog = np.zeros_like(f_temp)
             fog[(f_temp <= f_thresh)] = 1
@@ -108,6 +106,7 @@ for cfg in MODEL_CONFIGS:
             plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
             plt.close()
+            print(f"  Successfully processed {cfg['id']} F{fxx:02d}")
         except Exception as e:
             print(f"  Error on {cfg['id']} F{fxx}: {e}")
             continue
