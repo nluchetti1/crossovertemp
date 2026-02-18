@@ -1,5 +1,5 @@
 import warnings
-# Suppress xarray/cfgrib merge warnings and Herbie regex alerts seen in logs
+# Suppress specific xarray and Herbie alerts for a cleaner log
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="herbie")
 
@@ -24,9 +24,10 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
+# RAP product set to 'awp130pgrb' which often has better metadata compatibility
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
-    {'id': 'RAP',  'model': 'rap',  'prod': 'wrfprs', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m'},
     {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
     {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
     {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
@@ -46,7 +47,6 @@ if ref_time > now: ref_time -= timedelta(days=1)
 
 print(f"Running RTMA Analysis for {ref_time}")
 H_init = Herbie(ref_time, model='rtma', product='anl')
-# Removed index slicing [0] and 'engine' to prevent KeyErrors/TypeErrors
 ds_init = H_init.xarray(":(TMP|DPT):2 m")
 if isinstance(ds_init, list): ds_init = ds_init[0]
 
@@ -70,23 +70,29 @@ for i in range(12):
 # ================= 2. FORECAST LOOP =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
-hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+hrrr_init = (now - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
 run_id = hrrr_init.strftime("%Y%m%d_%Hz")
 
 for cfg in MODEL_CONFIGS:
     print(f"--- Attempting {cfg['id']} ---")
-    for fxx in range(1, 2):
+    for fxx in range(1, 19):
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-            # FIXED: Stripped 'engine' argument to stop the "unexpected keyword" crash
-            ds_data = H_fcst.xarray(cfg['search'])
-            ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             
+            # Use direct download for NBM/RAP to avoid indexing errors
+            if cfg['model'] in ['nbm', 'rap']:
+                H_fcst.download(cfg['search'])
+                ds_data = H_fcst.xarray(cfg['search'])
+            else:
+                ds_data = H_fcst.xarray(cfg['search'])
+                
+            ds = ds_data[0] if isinstance(ds_data, list) else ds_data
             if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
+            # Stability Check
             try:
                 u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
                 f_wind = np.sqrt(u**2 + v**2) * 1.94384
@@ -108,8 +114,7 @@ for cfg in MODEL_CONFIGS:
                           transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), 
                           vmin=0, vmax=2, alpha=0.8)
             
-            valid_z = (hrrr_init + timedelta(hours=fxx)).strftime('%HZ')
-            plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
+            plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {(hrrr_init + timedelta(hours=fxx)).strftime('%HZ')}", loc='left', fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100)
             plt.close()
             print(f"  Processed {cfg['id']} F{fxx:02d}")
@@ -117,11 +122,5 @@ for cfg in MODEL_CONFIGS:
             print(f"  Error on {cfg['id']} F{fxx}: {e}")
             continue
 
-# Final status and cleanup
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
-
-# CLEANUP: Remove local data to prevent disk space issues on GitHub Runner
-data_path = os.path.expanduser('~/data')
-if os.path.exists(data_path):
-    shutil.rmtree(data_path, ignore_errors=True)
