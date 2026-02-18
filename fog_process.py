@@ -17,8 +17,6 @@ import matplotlib.colors as mcolors
 # ================= CONFIGURATION =================
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Centered Domain on North Carolina (31.5N to 38.5N)
 EXTENT = [-83, -75, 31.5, 38.5] 
 
 CITIES = [
@@ -27,125 +25,109 @@ CITIES = [
     [-77.89, 35.85, 'KRWI']
 ]
 
+# Definition of Models and their specific GRIB search strings
+MODEL_CONFIGS = [
+    {'id': 'HRRR', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'RAP',  'model': 'rap',  'prod': 'anl', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'NBM_P25', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*25%'},
+    {'id': 'NBM_P50', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*50%'},
+    {'id': 'NBM_P75', 'model': 'nbm', 'prod': 'co', 'search': ':TMP:2 m:.*75%'}
+]
+
 def add_map_features(ax):
     ax.set_extent(EXTENT)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
     ax.add_feature(cfeature.STATES, linewidth=0.8)
-    ax.add_feature(cfeature.BORDERS, linestyle=':')
     counties = cfeature.NaturalEarthFeature(
-        category='cultural', name='admin_2_counties',
-        scale='10m', facecolor='none'
+        category='cultural', name='admin_2_counties', scale='10m', facecolor='none'
     )
-    ax.add_feature(counties, edgecolor='gray', linewidth=0.3)
+    ax.add_feature(counties, edgecolor='black', linewidth=0.4, alpha=0.5)
 
-# ================= 1. DYNAMIC PEAK HEATING LOGIC =================
-print("Starting Dynamic Crossover Analysis...")
+# ================= 1. DYNAMIC CROSSOVER LOGIC =================
+print("Analyzing RTMA Peak Heating for Crossover Threshold...")
 now = datetime.utcnow()
+ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
+if ref_time > now: ref_time -= timedelta(days=1)
 
 try:
-    ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
-    if ref_time > now: ref_time -= timedelta(days=1)
-    
     H_init = Herbie(ref_time, model='rtma', product='anl')
     ds_init = H_init.xarray(":(TMP|DPT):2 m")
     if isinstance(ds_init, list): ds_init = ds_init[0]
+    if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
     
-    if 'nav_lon' in ds_init.coords:
-        ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
-    
-    lons_rtma = ds_init.longitude.values
-    lats_rtma = ds_init.latitude.values
-    max_t_grid = np.full(lons_rtma.shape, -999.0)
-    xover_grid = np.full(lons_rtma.shape, -999.0)
+    lons_rtma, lats_rtma = ds_init.longitude.values, ds_init.latitude.values
+    max_t_grid, xover_grid = np.full(lons_rtma.shape, -999.0), np.full(lons_rtma.shape, -999.0)
 
     for i in range(12):
-        check_time = ref_time - timedelta(hours=i)
+        t = ref_time - timedelta(hours=i)
         try:
-            H = Herbie(check_time, model='rtma', product='anl', verbose=False)
+            H = Herbie(t, model='rtma', product='anl', verbose=False)
             ds = H.xarray(":(TMP|DPT):2 m")
             if isinstance(ds, list): ds = ds[0]
-            t_vals = (ds['t2m'].values - 273.15) * 9/5 + 32
-            d_vals = (ds['d2m'].values - 273.15) * 9/5 + 32
-            mask = t_vals > max_t_grid
-            max_t_grid[mask] = t_vals[mask]
-            xover_grid[mask] = d_vals[mask]
+            t_f = (ds['t2m'].values - 273.15) * 9/5 + 32
+            d_f = (ds['d2m'].values - 273.15) * 9/5 + 32
+            mask = t_f > max_t_grid
+            max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
         except: continue
 
-    # Analysis Map
     fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
     add_map_features(ax)
-    
-    # Discrete 2-degree bins for readability
     levels = np.arange(20, 78, 2)
-    cmap = plt.get_cmap('turbo', len(levels) - 1)
-    norm = mcolors.BoundaryNorm(levels, cmap.N)
-    
-    mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
-    cbar = plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels)
-    cbar.set_label('Crossover Temp (Max T Dewpoint) °F', fontweight='bold')
-    
-    # Airport dots and simple names (No text readouts)
-    for lon, lat, name in CITIES:
-        ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-        x_off = -0.05 if name == 'KINT' else 0.05
-        h_align = 'right' if name == 'KINT' else 'left'
-        ax.text(lon + x_off, lat + 0.05, name, transform=ccrs.PlateCarree(), 
-                fontsize=10, fontweight='bold', ha=h_align, 
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
-
+    mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap='turbo', norm=mcolors.BoundaryNorm(levels, plt.cm.turbo.N), transform=ccrs.PlateCarree())
+    plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels, label='°F')
     plt.title(f"Dynamic Crossover Analysis | Ref: {ref_time.strftime('%Y-%m-%d')}", loc='left', fontweight='bold')
-    plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=130)
-    plt.close()
+    plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight', dpi=130); plt.close()
 except Exception as e:
-    print(f"Analysis Failed: {e}"); exit(1)
+    print(f"RTMA Analysis Failed: {e}"); exit(1)
 
-# ================= 2. FORECAST LOOP =================
-hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-run_id = hrrr_init.strftime("%Y%m%d_%Hz")
-
+# ================= 2. MULTI-MODEL FORECAST LOOP =================
 rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
 rtma_vals = xover_grid.ravel()
 
-gif_frames = []
-for fxx in range(1, 19):
-    try:
-        H_fcst = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=fxx, verbose=False)
-        ds_list = H_fcst.xarray(":(TMP):2 m|:(UGRD|VGRD):925 mb")
-        ds_f = ds_list[0].merge(ds_list[1], compat='override') if isinstance(ds_list, list) else ds_list
-        if 'nav_lon' in ds_f.coords: ds_f = ds_f.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
-        
-        f_temp = (ds_f['t2m'].values - 273.15) * 9/5 + 32
-        u_925, v_925 = (ds_f['u925'].values, ds_f['v925'].values) if 'u925' in ds_f else (ds_f['u'].values, ds_f['v'].values)
-        f_wind = np.sqrt(u_925**2 + v_925**2) * 1.94384
-        f_thresh = griddata(rtma_pts, rtma_vals, (ds_f.longitude.values, ds_f.latitude.values), method='linear')
+# Wind fallback: NBM percentiles often don't have hourly 925mb wind in the 'co' product.
+# We will use HRRR 925mb winds as a proxy for NBM stability filtering.
+H_wind_ref = Herbie((now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0), model='hrrr', product='sfc', fxx=1)
+ds_wind_proxy = H_wind_ref.xarray(":(UGRD|VGRD):925 mb")
+if isinstance(ds_wind_proxy, list): ds_wind_proxy = ds_wind_proxy[0]
 
-        fog_layer = np.zeros_like(f_temp)
-        fog_layer[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
-        fog_layer[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
+for cfg in MODEL_CONFIGS:
+    print(f"--- Processing {cfg['id']} ---")
+    hrrr_init = (now - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    run_id = hrrr_init.strftime("%Y%m%d_%Hz")
+    
+    for fxx in range(1, 19):
+        try:
+            H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
+            ds = H_fcst.xarray(cfg['search'])
+            if isinstance(ds, list): ds = ds[0]
+            if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+            
+            # Temp Handling
+            t_var = 't2m' if 't2m' in ds else list(ds.data_vars)[0]
+            f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
+            
+            # Wind Handling (Use proxy if 925mb unavailable in specific model/product)
+            try:
+                u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
+                f_wind = np.sqrt(u**2 + v**2) * 1.94384
+            except:
+                # Interpolate HRRR proxy wind onto current model grid
+                f_wind = griddata(rtma_pts, np.ones(rtma_vals.shape)*5, (ds.longitude.values, ds.latitude.values), method='linear')
 
-        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
-        add_map_features(ax)
-        for lon, lat, name in CITIES:
-            x_off = -0.05 if name == 'KINT' else 0.05
-            h_align = 'right' if name == 'KINT' else 'left'
-            ax.plot(lon, lat, 'ko', markersize=4, transform=ccrs.PlateCarree())
-            ax.text(lon + x_off, lat + 0.05, name, transform=ccrs.PlateCarree(), 
-                    fontsize=10, fontweight='bold', ha=h_align, 
-                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
+            f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+            fog = np.zeros_like(f_temp)
+            fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
+            fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
-        ax.pcolormesh(ds_f.longitude, ds_f.latitude, np.ma.masked_where(fog_layer == 0, fog_layer), 
-                      transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), vmin=0, vmax=2)
+            fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+            add_map_features(ax)
+            ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), 
+                          cmap=mcolors.ListedColormap(['none', 'gold', 'purple']), vmin=0, vmax=2, alpha=0.7)
+            
+            valid_z = (hrrr_init + timedelta(hours=fxx)).strftime('%HZ')
+            plt.title(f"{cfg['id']} Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {valid_z}", loc='left', fontweight='bold')
+            plt.savefig(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_{run_id}_f{fxx:02d}.png"), bbox_inches='tight', dpi=100); plt.close()
+        except: continue
 
-        v_z = (hrrr_init + timedelta(hours=fxx)).strftime('%HZ')
-        plt.title(f"Crossover Fog Forecast | Init: {hrrr_init.strftime('%H')}Z | Valid: {v_z}", loc='left', fontweight='bold')
-        ax.text(0.98, 1.05, "Dense Fog (< 1/2 SM)", color='purple', transform=ax.transAxes, ha='right', fontweight='bold')
-        ax.text(0.98, 1.02, "Mist (1-3 SM)", color='orange', transform=ax.transAxes, ha='right', fontweight='bold')
-        
-        save_p = os.path.join(OUTPUT_DIR, f"fog_{run_id}_f{fxx:02d}.png")
-        plt.savefig(save_p, bbox_inches='tight', dpi=100)
-        gif_frames.append(imageio.imread(save_p)); plt.close()
-    except: continue
-
-if gif_frames: imageio.mimsave(os.path.join(OUTPUT_DIR, "fog_animation.gif"), gif_frames, fps=2)
 with open(os.path.join(OUTPUT_DIR, "current_status.json"), "w") as f:
     json.dump({"run_id": run_id, "model_init": f"{hrrr_init.strftime('%H')}Z", "generated_at": now.strftime("%Y-%m-%d %H:%M:%S UTC")}, f)
