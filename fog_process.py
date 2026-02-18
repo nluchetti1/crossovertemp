@@ -64,7 +64,7 @@ for i in range(12):
         max_t_grid[mask], xover_grid[mask] = t_f[mask], d_f[mask]
     except: continue
 
-# Plot Crossover Map with City Identifiers
+# Plot Crossover Map with RESTORED City Identifiers
 fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 78, 2)
@@ -88,7 +88,7 @@ for cfg in MODEL_CONFIGS:
         try:
             H_fcst = Herbie(hrrr_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
             
-            # FIXED: Hardcore local data handling for NBM to prevent subset path errors
+            # FIXED: Bypass Herbie subsetting for NBM to prevent subset path errors
             if cfg['model'] == 'nbm':
                 local_file = H_fcst.download(cfg['search'])
                 ds_data = H_fcst.xarray(local_file)
@@ -100,7 +100,6 @@ for cfg in MODEL_CONFIGS:
             t_var = [v for v in ds.data_vars if 't' in v.lower() and 'height' not in v.lower()][0]
             f_temp = (ds[t_var].values - 273.15) * 9/5 + 32
             
-            # Stability Check
             try:
                 u, v = (ds['u925'].values, ds['v925'].values) if 'u925' in ds else (ds['u'].values, ds['v'].values)
                 f_wind = np.sqrt(u**2 + v**2) * 1.94384
