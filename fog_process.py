@@ -108,7 +108,7 @@ for cfg in MODEL_CONFIGS:
     if not found_init: continue
     print(f"--- Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z) ---")
     
-    for fxx in range(1, 19):
+    for fxx in range(1, 2):
         try:
             temp_grib = f"temp_{cfg['id']}.grib2"
             if cfg['method'] == 'herbie':
