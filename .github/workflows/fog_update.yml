@@ -36,6 +36,7 @@ jobs:
             echo "No changes"
           else
             git commit -m "Update Multi-Model Fog Dashboard"
-            git pull --rebase -X theirs origin main
+            # FIXED: Added --autostash so git handles leftover pycache files safely
+            git pull --rebase --autostash -X theirs origin main
             git push origin main
           fi
