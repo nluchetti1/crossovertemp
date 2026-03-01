@@ -286,7 +286,7 @@ for cfg in MODEL_CONFIGS:
                     ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     plot_cities(ax)
-                    ax.pcolormesh(ds.longitude, latitude=ds.latitude, np.ma.masked_where(fog == 0, fog), 
+                    ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
                                   transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
                     
                     valid_dt = now + timedelta(seconds=int(step_delta / np.timedelta64(1, 's')))
