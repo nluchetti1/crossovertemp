@@ -50,25 +50,20 @@ def plot_cities(ax):
                 fontsize=9, fontweight='bold', zorder=10)
         t.set_bbox(dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
 
-# ================= 1. CROSSOVER ANALYSIS =================
-print("\n--- Step 1: Generating Crossover Analysis ---")
+# ================= 1. CROSSOVER ANALYSIS (FOR DASHBOARD MAP) =================
+print("\n--- Step 1: Generating Crossover Analysis Map ---")
 now = datetime.now(timezone.utc).replace(tzinfo=None)
 current_hour = now.hour
 
-# Determine which shift we are in (Morning Forecast vs Evening Observed)
 is_day_shift = 12 <= current_hour < 23
-xover_success = False
 
-# Default Grid in case everything fails
+# Default Grid
 lons_xover, lats_xover = np.meshgrid(np.linspace(EXTENT[0], EXTENT[1], 100), np.linspace(EXTENT[2], EXTENT[3], 100))
-xover_grid = np.full(lons_xover.shape, 50.0) 
-max_t_grid = np.full(lons_xover.shape, -999.0)
+xover_grid_global = np.full(lons_xover.shape, 50.0) 
 
 if is_day_shift:
-    print(f"  > Shift: Day (Using FORECASTED Crossover Temp from HRRR)")
-    title_prefix = "Forecasted Crossover"
-    
-    # Find the most recent HRRR run to use for the forecast crossover
+    print(f"  > Shift: Day (Plotting HRRR Forecasted Crossover for Dashboard)")
+    title_prefix = "Forecasted Crossover (HRRR Baseline)"
     hrrr_init = None
     for h_back in range(4):
         check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
@@ -80,48 +75,35 @@ if is_day_shift:
 
     if hrrr_init:
         try:
-            # Init grid
             H_init = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=0, verbose=False)
-            
-            # FIXED: Safe Dataset Extraction
             ds_init = H_init.xarray(":(TMP|DPT):2 m")
             if isinstance(ds_init, list): ds_init = ds_init[0]
-            
             if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
-            
             max_t_grid = np.full(lons_xover.shape, -999.0)
-            xover_grid = np.full(lons_xover.shape, 50.0) 
+            xover_grid_global = np.full(lons_xover.shape, 50.0) 
 
-            # Loop forward to find max heating (Valid times 16Z - 23Z)
             for fxx in range(0, 15):
                 valid_time = hrrr_init + timedelta(hours=fxx)
                 if 16 <= valid_time.hour <= 23:
                     try:
                         H = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=fxx, verbose=False)
-                        
-                        # FIXED: Safe Dataset Extraction
                         ds = H.xarray(":(TMP|DPT):2 m")
                         if isinstance(ds, list): ds = ds[0]
-                        
                         t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
                         d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
-                        
                         t_f = (ds[t_key].values - 273.15) * 9/5 + 32
                         d_f = (ds[d_key].values - 273.15) * 9/5 + 32
-                        
-                        # Grab the dewpoint where the temp is at its max
                         mask = t_f > max_t_grid
                         max_t_grid[mask] = t_f[mask]
-                        xover_grid[mask] = d_f[mask]
-                        xover_success = True
+                        xover_grid_global[mask] = d_f[mask]
                     except: continue
         except Exception as e:
             print(f"Warning: HRRR Forecast Crossover failed ({e}).")
 
 else:
-    print(f"  > Shift: Evening/Night (Using OBSERVED Crossover Temp from RTMA)")
-    title_prefix = "Observed Crossover"
+    print(f"  > Shift: Evening/Night (Plotting OBSERVED Crossover from RTMA)")
+    title_prefix = "Observed Crossover (RTMA)"
     ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
     if ref_time > now: ref_time -= timedelta(days=1)
 
@@ -129,11 +111,10 @@ else:
         H_init = Herbie(ref_time, model='rtma', product='anl', verbose=False)
         ds_init = H_init.xarray(":(TMP|DPT):2 m")
         if isinstance(ds_init, list): ds_init = ds_init[0]
-        
         if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
         max_t_grid = np.full(lons_xover.shape, -999.0)
-        xover_grid = np.full(lons_xover.shape, -999.0)
+        xover_grid_global = np.full(lons_xover.shape, -999.0)
 
         for i in range(12):
             t_check = ref_time - timedelta(hours=i)
@@ -141,36 +122,32 @@ else:
                 H = Herbie(t_check, model='rtma', product='anl', verbose=False)
                 ds = H.xarray(":(TMP|DPT):2 m")
                 if isinstance(ds, list): ds = ds[0]
-                
                 t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
                 d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
                 t_f = (ds[t_key].values - 273.15) * 9/5 + 32
                 d_f = (ds[d_key].values - 273.15) * 9/5 + 32
-                
                 mask = t_f > max_t_grid
                 max_t_grid[mask] = t_f[mask]
-                xover_grid[mask] = d_f[mask]
-                xover_success = True
+                xover_grid_global[mask] = d_f[mask]
             except: continue
     except Exception as e:
         print(f"Warning: RTMA Analysis failed ({e}).")
 
-# Plot Crossover
 fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 82, 2)
 cmap = plt.cm.turbo
 norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-mesh = ax.pcolormesh(lons_xover, lats_xover, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+mesh = ax.pcolormesh(lons_xover, lats_xover, xover_grid_global, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
 plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='Crossover Temp (°F)')
 plot_cities(ax)
-plt.title(f"{title_prefix} Threshold | Generated: {now.strftime('%H')}Z", fontweight='bold')
+plt.title(f"{title_prefix} | Generated: {now.strftime('%H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight')
 plt.close()
 
-# Prepare crossover points for interpolation in Step 2
-xover_pts = np.array([lons_xover.ravel(), lats_xover.ravel()]).T
-xover_vals = xover_grid.ravel()
+# Keep global points for interpolation (used universally during night shift)
+xover_pts_global = np.array([lons_xover.ravel(), lats_xover.ravel()]).T
+xover_vals_global = xover_grid_global.ravel()
 
 
 # ================= 2. FORECAST GENERATION =================
@@ -180,7 +157,6 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
-    # --- CLEANUP OLD FILES FOR THIS MODEL ---
     old_files = glob.glob(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_*.*"))
     for f in old_files:
         try: os.remove(f)
@@ -203,6 +179,36 @@ for cfg in MODEL_CONFIGS:
 
         print(f"Processing {cfg['id']} (Init: {found_init.strftime('%H')}Z)")
 
+        # Native Model Crossover Calculation (Day Shift Only)
+        model_xover = None
+        if is_day_shift:
+            try:
+                print(f"  > Calculating native {cfg['id']} crossover grid...")
+                H_init_mod = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=0, verbose=False)
+                ds_mod = H_init_mod.xarray(":(TMP|DPT):2 m")
+                if isinstance(ds_mod, list): ds_mod = ds_mod[0]
+                mod_max_t = np.full(ds_mod.t2m.shape, -999.0)
+                model_xover = np.full(ds_mod.t2m.shape, 50.0)
+
+                for fxx_check in range(0, 15):
+                    valid_time = found_init + timedelta(hours=fxx_check)
+                    if 16 <= valid_time.hour <= 23:
+                        try:
+                            H_c = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx_check, verbose=False)
+                            ds_c = H_c.xarray(":(TMP|DPT):2 m")
+                            if isinstance(ds_c, list): ds_c = ds_c[0]
+                            t_key = [k for k in ds_c.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+                            d_key = [k for k in ds_c.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+                            t_f = (ds_c[t_key].values - 273.15) * 9/5 + 32
+                            d_f = (ds_c[d_key].values - 273.15) * 9/5 + 32
+                            mask = t_f > mod_max_t
+                            mod_max_t[mask] = t_f[mask]
+                            model_xover[mask] = d_f[mask]
+                        except: continue
+            except Exception as e:
+                print(f"  > Failed native crossover for {cfg['id']}. Falling back to RTMA/HRRR global.")
+                model_xover = None
+
         for fxx in range(1, 19):
             try:
                 H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
@@ -220,8 +226,11 @@ for cfg in MODEL_CONFIGS:
                     f_wind = np.sqrt(ds[u].values**2 + ds[v].values**2) * 1.94384
                 except: f_wind = np.full(f_temp.shape, 5.0)
 
-                # Interpolate crossover threshold to model grid
-                f_thresh = griddata(xover_pts, xover_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                # Threshold Assignment
+                if is_day_shift and model_xover is not None:
+                    f_thresh = model_xover
+                else:
+                    f_thresh = griddata(xover_pts_global, xover_vals_global, (ds.longitude.values, ds.latitude.values), method='linear')
                 
                 fog = np.zeros_like(f_temp)
                 fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
@@ -268,23 +277,47 @@ for cfg in MODEL_CONFIGS:
             continue
 
         try:
-            ds_full = xr.open_dataset(temp_file, engine='cfgrib', 
-                                      backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
-            
-            steps = ds_full.step.values
+            # We open T and Td separately to avoid cfgrib conflict errors
+            ds_t = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+            ds_d = None
+            try:
+                ds_d = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2d'}})
+            except: pass
+
+            steps = ds_t.step.values
             if len(steps) > 18: steps = steps[:18]
+
+            # Native NDFD Crossover Calculation
+            ndfd_xover = None
+            if is_day_shift and ds_d is not None:
+                print(f"  > Calculating native NDFD crossover grid...")
+                ndfd_max_t = np.full(ds_t.t2m[0].shape, -999.0)
+                ndfd_xover = np.full(ds_t.t2m[0].shape, 50.0)
+                
+                for step_val in steps:
+                    valid_dt = now + timedelta(seconds=int(step_val / np.timedelta64(1, 's')))
+                    if 16 <= valid_dt.hour <= 23:
+                        try:
+                            t_val = (ds_t.sel(step=step_val).t2m.values - 273.15) * 9/5 + 32
+                            d_val = (ds_d.sel(step=step_val).d2m.values - 273.15) * 9/5 + 32
+                            mask = t_val > ndfd_max_t
+                            ndfd_max_t[mask] = t_val[mask]
+                            ndfd_xover[mask] = d_val[mask]
+                        except: continue
 
             for i, step_delta in enumerate(steps):
                 try:
-                    ds = ds_full.sel(step=step_delta)
-                    if 'longitude' not in ds.coords and 'lon' in ds.coords:
-                        ds = ds.rename({'lon': 'longitude', 'lat': 'latitude'})
+                    ds_frame = ds_t.sel(step=step_delta)
+                    if 'longitude' not in ds_frame.coords and 'lon' in ds_frame.coords:
+                        ds_frame = ds_frame.rename({'lon': 'longitude', 'lat': 'latitude'})
 
-                    f_temp = (ds.t2m.values - 273.15) * 9/5 + 32
+                    f_temp = (ds_frame.t2m.values - 273.15) * 9/5 + 32
                     f_wind = np.full(f_temp.shape, 5.0)
 
-                    # Interpolate crossover threshold to NDFD grid
-                    f_thresh = griddata(xover_pts, xover_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                    if is_day_shift and ndfd_xover is not None:
+                        f_thresh = ndfd_xover
+                    else:
+                        f_thresh = griddata(xover_pts_global, xover_vals_global, (ds_frame.longitude.values, ds_frame.latitude.values), method='linear')
                     
                     fog = np.zeros_like(f_temp)
                     fog[(f_temp <= f_thresh)] = 1
@@ -295,9 +328,7 @@ for cfg in MODEL_CONFIGS:
                     ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     plot_cities(ax)
-                    
-                    # FIXED: Removed "latitude=" keyword argument here
-                    ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
+                    ax.pcolormesh(ds_frame.longitude, ds_frame.latitude, np.ma.masked_where(fog == 0, fog), 
                                   transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
                     
                     valid_dt = now + timedelta(seconds=int(step_delta / np.timedelta64(1, 's')))
@@ -309,7 +340,8 @@ for cfg in MODEL_CONFIGS:
 
                 except Exception as e: continue
             
-            ds_full.close()
+            ds_t.close()
+            if ds_d is not None: ds_d.close()
             if os.path.exists(temp_file): os.remove(temp_file)
 
         except Exception as e:
