@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-import os, json, shutil, requests
+import os, json, shutil, requests, glob
 import imageio.v2 as imageio
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta, timezone
@@ -17,8 +17,7 @@ import xarray as xr
 OUTPUT_DIR = "images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# UPDATED EXTENT: Tighter box around NC to reduce "elongated" look
-# [West, East, South, North]
+# UPDATED EXTENT: Tighter box around NC
 EXTENT = [-84.2, -75.3, 33.2, 37.0] 
 
 CITIES = [
@@ -51,65 +50,119 @@ def plot_cities(ax):
                 fontsize=9, fontweight='bold', zorder=10)
         t.set_bbox(dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
 
-# ================= 1. RTMA ANALYSIS =================
+# ================= 1. CROSSOVER ANALYSIS =================
 print("\n--- Step 1: Generating Crossover Analysis ---")
 now = datetime.now(timezone.utc).replace(tzinfo=None)
-ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
-if ref_time > now: ref_time -= timedelta(days=1)
+current_hour = now.hour
 
-# Default Grid
-lons_rtma, lats_rtma = np.meshgrid(np.linspace(EXTENT[0], EXTENT[1], 100), np.linspace(EXTENT[2], EXTENT[3], 100))
-xover_grid = np.full(lons_rtma.shape, 50.0)
-rtma_success = False
+# Determine which shift we are in (Morning Forecast vs Evening Observed)
+is_day_shift = 12 <= current_hour < 23
+xover_success = False
 
-try:
-    H_init = Herbie(ref_time, model='rtma', product='anl', verbose=False)
-    ds_init = H_init.xarray(":(TMP|DPT):2 m")
-    if isinstance(ds_init, list): ds_init = ds_init[0]
+# Default Grid in case everything fails
+lons_xover, lats_xover = np.meshgrid(np.linspace(EXTENT[0], EXTENT[1], 100), np.linspace(EXTENT[2], EXTENT[3], 100))
+xover_grid = np.full(lons_xover.shape, 50.0) 
+max_t_grid = np.full(lons_xover.shape, -999.0)
+
+if is_day_shift:
+    print(f"  > Shift: Day (Using FORECASTED Crossover Temp from HRRR)")
+    title_prefix = "Forecasted Crossover"
     
-    if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
-    lons_rtma, lats_rtma = ds_init.longitude.values, ds_init.latitude.values
-    max_t_grid = np.full(lons_rtma.shape, -999.0)
-    xover_grid = np.full(lons_rtma.shape, -999.0)
-
-    for i in range(12):
-        t_check = ref_time - timedelta(hours=i)
+    # Find the most recent HRRR run to use for the forecast crossover
+    hrrr_init = None
+    for h_back in range(4):
+        check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
         try:
-            H = Herbie(t_check, model='rtma', product='anl', verbose=False)
-            ds = H.xarray(":(TMP|DPT):2 m")
-            if isinstance(ds, list): ds = ds[0]
-            
-            t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
-            d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
-            t_f = (ds[t_key].values - 273.15) * 9/5 + 32
-            d_f = (ds[d_key].values - 273.15) * 9/5 + 32
-            mask = t_f > max_t_grid
-            max_t_grid[mask] = t_f[mask]
-            xover_grid[mask] = d_f[mask]
-            rtma_success = True
-        except: continue
-except Exception as e:
-    print(f"Warning: RTMA Analysis failed ({e}). Using dummy threshold.")
+            if Herbie(check_time, model='hrrr', product='sfc', verbose=False).grib:
+                hrrr_init = check_time
+                break
+        except: pass
 
-# Plot RTMA - Adjusted figsize to (12, 7) for better aspect ratio
+    if hrrr_init:
+        try:
+            # Init grid
+            H_init = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=0, verbose=False)
+            ds_init = H_init.xarray(":(TMP|DPT):2 m")[0]
+            if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+            lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
+            
+            max_t_grid = np.full(lons_xover.shape, -999.0)
+            xover_grid = np.full(lons_xover.shape, 50.0) 
+
+            # Loop forward to find max heating (Valid times 16Z - 23Z)
+            for fxx in range(0, 15):
+                valid_time = hrrr_init + timedelta(hours=fxx)
+                if 16 <= valid_time.hour <= 23:
+                    try:
+                        H = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=fxx, verbose=False)
+                        ds = H.xarray(":(TMP|DPT):2 m")[0]
+                        t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+                        d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+                        
+                        t_f = (ds[t_key].values - 273.15) * 9/5 + 32
+                        d_f = (ds[d_key].values - 273.15) * 9/5 + 32
+                        
+                        # Grab the dewpoint where the temp is at its max
+                        mask = t_f > max_t_grid
+                        max_t_grid[mask] = t_f[mask]
+                        xover_grid[mask] = d_f[mask]
+                        xover_success = True
+                    except: continue
+        except Exception as e:
+            print(f"Warning: HRRR Forecast Crossover failed ({e}).")
+
+else:
+    print(f"  > Shift: Evening/Night (Using OBSERVED Crossover Temp from RTMA)")
+    title_prefix = "Observed Crossover"
+    ref_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
+    if ref_time > now: ref_time -= timedelta(days=1)
+
+    try:
+        H_init = Herbie(ref_time, model='rtma', product='anl', verbose=False)
+        ds_init = H_init.xarray(":(TMP|DPT):2 m")
+        if isinstance(ds_init, list): ds_init = ds_init[0]
+        
+        if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+        lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
+        max_t_grid = np.full(lons_xover.shape, -999.0)
+        xover_grid = np.full(lons_xover.shape, -999.0)
+
+        for i in range(12):
+            t_check = ref_time - timedelta(hours=i)
+            try:
+                H = Herbie(t_check, model='rtma', product='anl', verbose=False)
+                ds = H.xarray(":(TMP|DPT):2 m")
+                if isinstance(ds, list): ds = ds[0]
+                
+                t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+                d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+                t_f = (ds[t_key].values - 273.15) * 9/5 + 32
+                d_f = (ds[d_key].values - 273.15) * 9/5 + 32
+                
+                mask = t_f > max_t_grid
+                max_t_grid[mask] = t_f[mask]
+                xover_grid[mask] = d_f[mask]
+                xover_success = True
+            except: continue
+    except Exception as e:
+        print(f"Warning: RTMA Analysis failed ({e}).")
+
+# Plot Crossover
 fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
 add_map_features(ax)
 levels = np.arange(20, 82, 2)
 cmap = plt.cm.turbo
 norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-mesh = ax.pcolormesh(lons_rtma, lats_rtma, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+mesh = ax.pcolormesh(lons_xover, lats_xover, xover_grid, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
 plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='Crossover Temp (°F)')
 plot_cities(ax)
-plt.title(f"Crossover Threshold Analysis | {ref_time.strftime('%Y-%m-%d %H')}Z", fontweight='bold')
+plt.title(f"{title_prefix} Threshold | Generated: {now.strftime('%H')}Z", fontweight='bold')
 plt.savefig(os.path.join(OUTPUT_DIR, "crossover_analysis.png"), bbox_inches='tight')
 plt.close()
 
-if rtma_success:
-    rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
-    rtma_vals = xover_grid.ravel()
-else:
-    rtma_pts = np.array([lons_rtma.ravel(), lats_rtma.ravel()]).T
-    rtma_vals = xover_grid.ravel()
+# Prepare crossover points for interpolation in Step 2
+xover_pts = np.array([lons_xover.ravel(), lats_xover.ravel()]).T
+xover_vals = xover_grid.ravel()
 
 
 # ================= 2. FORECAST GENERATION =================
@@ -119,9 +172,15 @@ for cfg in MODEL_CONFIGS:
     gif_frames = []
     found_init = None
     
+    # --- CLEANUP OLD FILES FOR THIS MODEL ---
+    old_files = glob.glob(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}_*.*"))
+    for f in old_files:
+        try: os.remove(f)
+        except OSError: pass
+    
     # ------------------ HERBIE PATH (HRRR / RAP) ------------------
     if cfg['source'] == 'herbie':
-        for h_back in range(0, 6):
+        for h_back in range(2, 8):
             check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
             try:
                 H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False)
@@ -152,12 +211,13 @@ for cfg in MODEL_CONFIGS:
                     f_wind = np.sqrt(ds[u].values**2 + ds[v].values**2) * 1.94384
                 except: f_wind = np.full(f_temp.shape, 5.0)
 
-                f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                # Interpolate crossover threshold to model grid
+                f_thresh = griddata(xover_pts, xover_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                
                 fog = np.zeros_like(f_temp)
                 fog[(f_temp <= f_thresh) & (f_wind <= 15.0)] = 1
                 fog[(f_temp <= (f_thresh - 3.0)) & (f_wind <= 15.0)] = 2
 
-                # Adjusted figsize here too
                 fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
                 add_map_features(ax)
                 ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
@@ -214,18 +274,19 @@ for cfg in MODEL_CONFIGS:
                     f_temp = (ds.t2m.values - 273.15) * 9/5 + 32
                     f_wind = np.full(f_temp.shape, 5.0)
 
-                    f_thresh = griddata(rtma_pts, rtma_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                    # Interpolate crossover threshold to NDFD grid
+                    f_thresh = griddata(xover_pts, xover_vals, (ds.longitude.values, ds.latitude.values), method='linear')
+                    
                     fog = np.zeros_like(f_temp)
                     fog[(f_temp <= f_thresh)] = 1
                     fog[(f_temp <= (f_thresh - 3.0))] = 2
 
-                    # Adjusted figsize here too
                     fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
                     add_map_features(ax)
                     ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     plot_cities(ax)
-                    ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
+                    ax.pcolormesh(ds.longitude, latitude=ds.latitude, np.ma.masked_where(fog == 0, fog), 
                                   transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
                     
                     valid_dt = now + timedelta(seconds=int(step_delta / np.timedelta64(1, 's')))
