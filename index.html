@@ -54,9 +54,9 @@
         1. <strong>Crossover Identification:</strong> Forecast triggers when model surface temperature (T) falls to or below <strong>T<sub>xover</sub></strong>.<br>
         &nbsp;&nbsp;&nbsp;&bull; <em>Day Shift (12Z-22Z):</em> T<sub>xover</sub> uses each model's independent <strong>forecasted</strong> max heating dew point.<br>
         &nbsp;&nbsp;&nbsp;&bull; <em>Night Shift (23Z-11Z):</em> T<sub>xover</sub> uses the <strong>observed</strong> max heating dew point (RTMA Gridded or ASOS Point Interpolation).<br>
-        2. <strong>Stability Filter:</strong> Radiation fog suppressed if winds > 15 kts (HRRR/RAP). NDFD assumes calm winds.<br>
+        2. <strong>Stability Filter:</strong> Radiation fog suppressed if winds > 15 kts.<br>
         &nbsp;&nbsp;&nbsp;&bull; <span style="color: #b8860b; font-weight: bold;">Mist (Yellow):</span> Visibility 1-3 SM (T &le; T<sub>xover</sub>).<br>
-        &nbsp;&nbsp;&nbsp;&bull; <span style="color: #800080; font-weight: bold;">Dense Fog (Purple):</span> Visibility &lt; 1/2 SM (T &le; T<sub>xover</sub> - 3°F).
+        &nbsp;&nbsp;&nbsp;&bull; <span style="color: #800080; font-weight: bold;">Dense Fog (Purple):</span> Visibility &lt; 1/2 SM (T &le; T<sub>xover</sub> - 3°F). <em>*NDFD requires winds &lt; 3 kts for Dense.</em>
     </div>
 </div>
 
@@ -68,7 +68,7 @@
         const d = await r.json();
         document.getElementById('status-bar').innerText = `Dashboard Updated: ${d.generated_at}`;
         
-        currentShift = d.shift; // Reads 'day' or 'night' from JSON
+        currentShift = d.shift; 
         if (currentShift === 'night') {
             document.getElementById('night-select').style.display = 'inline-block';
         } else {
@@ -93,9 +93,9 @@
         let baseModel = document.getElementById('model-select').value;
         if (currentShift === 'night') {
             let nightSuffix = document.getElementById('night-select').value;
-            return baseModel + nightSuffix; // e.g., HRRR_RTMA
+            return baseModel + nightSuffix; 
         }
-        return baseModel; // e.g., HRRR
+        return baseModel; 
     }
 
     function saveGif() { window.open(`images/fog_${getPrefix()}_loop.gif`, '_blank'); }
