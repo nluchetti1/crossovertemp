@@ -2,14 +2,12 @@ name: Hourly Fog Update
 
 on:
   schedule:
-    # Runs at 30 minutes past every hour to capture both day and night shift updates
     - cron: '30 * * * *'
   workflow_dispatch:
 
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
-    # Increased timeout to 60 minutes for multi-model processing
     timeout-minutes: 60 
     permissions:
       contents: write
@@ -22,7 +20,8 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy
+          # ADDED PANDAS HERE
+          pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy pandas
 
       - name: Execute Fog Processing
         run: python fog_process.py
@@ -36,7 +35,6 @@ jobs:
             echo "No changes"
           else
             git commit -m "Update Multi-Model Fog Dashboard"
-            # FIXED: Added --autostash so git handles leftover pycache files safely
             git pull --rebase --autostash -X theirs origin main
             git push origin main
           fi
