@@ -145,7 +145,6 @@ for cfg in MODEL_CONFIGS:
         if not found_init: continue
         print(f"\nProcessing {cfg['id']} (Init: {found_init.strftime('%H')}Z)")
 
-        # Generate base grids and threshold dictionaries
         H_base = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
         ds_base = H_base.xarray(":(TMP|DPT):2 m")
         if isinstance(ds_base, list): ds_base = ds_base[0]
@@ -155,7 +154,6 @@ for cfg in MODEL_CONFIGS:
         gif_frames = {}
 
         if is_day_shift:
-            # Native Forecast Calculation
             mod_max_t = np.full(ds_base.t2m.shape, -999.0)
             native_grid = np.full(ds_base.t2m.shape, 50.0)
             for fxx_check in range(0, 15):
@@ -185,7 +183,6 @@ for cfg in MODEL_CONFIGS:
                 thresh_dict['_ASOS'] = {'grid': asos_grid, 'title': f"Observed ASOS/AWOS Crossover"}
                 gif_frames['_ASOS'] = []
 
-        # Plot the Threshold Analysis Maps
         for suffix, info in thresh_dict.items():
             fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
             add_map_features(ax)
@@ -200,7 +197,6 @@ for cfg in MODEL_CONFIGS:
             plt.savefig(os.path.join(OUTPUT_DIR, f"crossover_{cfg['id']}{suffix}.png"), bbox_inches='tight')
             plt.close()
 
-        # Generate Forecast Loops
         for fxx in range(1, 19):
             try:
                 H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
@@ -241,37 +237,54 @@ for cfg in MODEL_CONFIGS:
     elif cfg['source'] == 'manual_ndfd':
         print(f"\nProcessing {cfg['id']} (NDFD Operational)")
         temp_file = "temp_ndfd.grib2"
-        urls = ["https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin",
-                "https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.20240320/ds.temp.bin"]
+        td_file = "td_ndfd.grib2"
         
-        success = False
-        for url in urls:
-            try:
-                r = requests.get(url, stream=True, timeout=10)
-                if r.status_code == 200:
-                    with open(temp_file, 'wb') as f: shutil.copyfileobj(r.raw, f)
-                    success = True
-                    break
-            except: continue
-        
-        if not success: continue
+        t_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
+        d_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.td.bin"
+
+        # Download Temp file
+        try:
+            r_t = requests.get(t_url, stream=True, timeout=10)
+            if r_t.status_code == 200:
+                with open(temp_file, 'wb') as f: shutil.copyfileobj(r_t.raw, f)
+        except: pass
+
+        if not os.path.exists(temp_file):
+            print("  > Failed to download NDFD Temperature.")
+            continue
+
+        # Download Td file (Crucial for Day Shift)
+        try:
+            r_d = requests.get(d_url, stream=True, timeout=10)
+            if r_d.status_code == 200:
+                with open(td_file, 'wb') as f: shutil.copyfileobj(r_d.raw, f)
+        except: pass
 
         try:
             ds_t = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
             ds_d = None
-            try: ds_d = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2d'}})
-            except: pass
+            if os.path.exists(td_file):
+                try: ds_d = xr.open_dataset(td_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2d'}})
+                except: pass
 
             steps = ds_t.step.values
             if len(steps) > 18: steps = steps[:18]
 
             ds_base = ds_t.sel(step=steps[0])
-            if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
+            if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: 
+                ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
+            
+            # Secure grid coordinate handling for interpolation
+            ndfd_lons = ds_base.longitude.values
+            ndfd_lats = ds_base.latitude.values
+            if ndfd_lons.ndim == 1:
+                ndfd_lons, ndfd_lats = np.meshgrid(ndfd_lons, ndfd_lats)
             
             thresh_dict = {}
             gif_frames = {}
 
             if is_day_shift and ds_d is not None:
+                print("  > Calculating native NDFD crossover grid...")
                 ndfd_max_t = np.full(ds_base.t2m.shape, -999.0)
                 native_grid = np.full(ds_base.t2m.shape, 50.0)
                 for step_val in steps:
@@ -288,11 +301,13 @@ for cfg in MODEL_CONFIGS:
                 gif_frames[''] = []
             elif not is_day_shift:
                 if rtma_pts is not None:
-                    rtma_grid = interp_to_grid(rtma_pts, rtma_vals, ds_base.longitude.values, ds_base.latitude.values)
+                    print("  > Interpolating RTMA to NDFD grid...")
+                    rtma_grid = interp_to_grid(rtma_pts, rtma_vals, ndfd_lons, ndfd_lats)
                     thresh_dict['_RTMA'] = {'grid': rtma_grid, 'title': "Observed RTMA Crossover"}
                     gif_frames['_RTMA'] = []
                 if asos_pts is not None:
-                    asos_grid = interp_to_grid(asos_pts, asos_vals, ds_base.longitude.values, ds_base.latitude.values)
+                    print("  > Interpolating ASOS to NDFD grid...")
+                    asos_grid = interp_to_grid(asos_pts, asos_vals, ndfd_lons, ndfd_lats)
                     thresh_dict['_ASOS'] = {'grid': asos_grid, 'title': "Observed ASOS/AWOS Crossover"}
                     gif_frames['_ASOS'] = []
 
@@ -337,6 +352,7 @@ for cfg in MODEL_CONFIGS:
             ds_t.close()
             if ds_d is not None: ds_d.close()
             if os.path.exists(temp_file): os.remove(temp_file)
+            if os.path.exists(td_file): os.remove(td_file)
             
             for suffix, frames in gif_frames.items():
                 if frames: imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}{suffix}_loop.gif"), frames, fps=2, loop=0)
