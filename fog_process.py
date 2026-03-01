@@ -50,7 +50,6 @@ def plot_cities(ax):
                 fontsize=9, fontweight='bold', zorder=10)
         t.set_bbox(dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
 
-# Helper to combine linear interpolation with nearest-neighbor fallback (prevents edge NaNs)
 def interp_to_grid(pts, vals, lons, lats):
     grid_lin = griddata(pts, vals, (lons, lats), method='linear')
     grid_near = griddata(pts, vals, (lons, lats), method='nearest')
@@ -126,7 +125,6 @@ else:
 print("\n--- Step 2: Running Models ---")
 
 for cfg in MODEL_CONFIGS:
-    # Cleanup old frames
     for f in glob.glob(os.path.join(OUTPUT_DIR, f"*_{cfg['id']}*.*")):
         try: os.remove(f)
         except OSError: pass
@@ -213,6 +211,7 @@ for cfg in MODEL_CONFIGS:
 
                 for suffix, info in thresh_dict.items():
                     fog = np.zeros_like(f_temp)
+                    # HRRR/RAP Logic: Mist <= 15kts | Dense <= 15kts (Crossover - 3)
                     fog[(f_temp <= info['grid']) & (f_wind <= 15.0)] = 1
                     fog[(f_temp <= (info['grid'] - 3.0)) & (f_wind <= 15.0)] = 2
 
@@ -238,33 +237,35 @@ for cfg in MODEL_CONFIGS:
         print(f"\nProcessing {cfg['id']} (NDFD Operational)")
         temp_file = "temp_ndfd.grib2"
         td_file = "td_ndfd.grib2"
+        wspd_file = "wspd_ndfd.grib2"
         
         t_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
         d_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.td.bin"
+        w_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.wspd.bin"
 
-        # Download Temp file
-        try:
-            r_t = requests.get(t_url, stream=True, timeout=10)
-            if r_t.status_code == 200:
-                with open(temp_file, 'wb') as f: shutil.copyfileobj(r_t.raw, f)
-        except: pass
+        # Download files
+        for url, fname in [(t_url, temp_file), (d_url, td_file), (w_url, wspd_file)]:
+            try:
+                r = requests.get(url, stream=True, timeout=10)
+                if r.status_code == 200:
+                    with open(fname, 'wb') as f: shutil.copyfileobj(r.raw, f)
+            except: pass
 
         if not os.path.exists(temp_file):
             print("  > Failed to download NDFD Temperature.")
             continue
 
-        # Download Td file (Crucial for Day Shift)
-        try:
-            r_d = requests.get(d_url, stream=True, timeout=10)
-            if r_d.status_code == 200:
-                with open(td_file, 'wb') as f: shutil.copyfileobj(r_d.raw, f)
-        except: pass
-
         try:
             ds_t = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+            
             ds_d = None
             if os.path.exists(td_file):
                 try: ds_d = xr.open_dataset(td_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2d'}})
+                except: pass
+                
+            ds_w = None
+            if os.path.exists(wspd_file):
+                try: ds_w = xr.open_dataset(wspd_file, engine='cfgrib')
                 except: pass
 
             steps = ds_t.step.values
@@ -274,7 +275,6 @@ for cfg in MODEL_CONFIGS:
             if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: 
                 ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
             
-            # Secure grid coordinate handling for interpolation
             ndfd_lons = ds_base.longitude.values
             ndfd_lats = ds_base.latitude.values
             if ndfd_lons.ndim == 1:
@@ -284,7 +284,6 @@ for cfg in MODEL_CONFIGS:
             gif_frames = {}
 
             if is_day_shift and ds_d is not None:
-                print("  > Calculating native NDFD crossover grid...")
                 ndfd_max_t = np.full(ds_base.t2m.shape, -999.0)
                 native_grid = np.full(ds_base.t2m.shape, 50.0)
                 for step_val in steps:
@@ -301,12 +300,10 @@ for cfg in MODEL_CONFIGS:
                 gif_frames[''] = []
             elif not is_day_shift:
                 if rtma_pts is not None:
-                    print("  > Interpolating RTMA to NDFD grid...")
                     rtma_grid = interp_to_grid(rtma_pts, rtma_vals, ndfd_lons, ndfd_lats)
                     thresh_dict['_RTMA'] = {'grid': rtma_grid, 'title': "Observed RTMA Crossover"}
                     gif_frames['_RTMA'] = []
                 if asos_pts is not None:
-                    print("  > Interpolating ASOS to NDFD grid...")
                     asos_grid = interp_to_grid(asos_pts, asos_vals, ndfd_lons, ndfd_lats)
                     thresh_dict['_ASOS'] = {'grid': asos_grid, 'title': "Observed ASOS/AWOS Crossover"}
                     gif_frames['_ASOS'] = []
@@ -331,10 +328,21 @@ for cfg in MODEL_CONFIGS:
                     if 'longitude' not in ds_frame.coords and 'lon' in ds_frame.coords: ds_frame = ds_frame.rename({'lon': 'longitude', 'lat': 'latitude'})
                     f_temp = (ds_frame.t2m.values - 273.15) * 9/5 + 32
                     
+                    # Extract NDFD Wind Speed
+                    f_wind = np.full(f_temp.shape, 2.0) # Default to 2 kts if NDFD wind is missing
+                    if ds_w is not None:
+                        try:
+                            w_var = list(ds_w.data_vars)[0]
+                            # Using nearest temporal match in case wind steps differ slightly from temp steps
+                            f_wind = ds_w[w_var].sel(step=step_delta, method='nearest').values * 1.94384
+                        except: pass
+
                     for suffix, info in thresh_dict.items():
                         fog = np.zeros_like(f_temp)
-                        fog[(f_temp <= info['grid'])] = 1
-                        fog[(f_temp <= (info['grid'] - 3.0))] = 2
+                        
+                        # NEW NDFD LOGIC: Mist if <= 15kts | Dense if < 3kts
+                        fog[(f_temp <= info['grid']) & (f_wind <= 15.0)] = 1
+                        fog[(f_temp <= (info['grid'] - 3.0)) & (f_wind < 3.0)] = 2
 
                         fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
                         add_map_features(ax)
@@ -351,8 +359,9 @@ for cfg in MODEL_CONFIGS:
             
             ds_t.close()
             if ds_d is not None: ds_d.close()
-            if os.path.exists(temp_file): os.remove(temp_file)
-            if os.path.exists(td_file): os.remove(td_file)
+            if ds_w is not None: ds_w.close()
+            for tmp in [temp_file, td_file, wspd_file]:
+                if os.path.exists(tmp): os.remove(tmp)
             
             for suffix, frames in gif_frames.items():
                 if frames: imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}{suffix}_loop.gif"), frames, fps=2, loop=0)
