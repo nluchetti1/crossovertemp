@@ -82,7 +82,11 @@ if is_day_shift:
         try:
             # Init grid
             H_init = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=0, verbose=False)
-            ds_init = H_init.xarray(":(TMP|DPT):2 m")[0]
+            
+            # FIXED: Safe Dataset Extraction
+            ds_init = H_init.xarray(":(TMP|DPT):2 m")
+            if isinstance(ds_init, list): ds_init = ds_init[0]
+            
             if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
             lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
             
@@ -95,7 +99,11 @@ if is_day_shift:
                 if 16 <= valid_time.hour <= 23:
                     try:
                         H = Herbie(hrrr_init, model='hrrr', product='sfc', fxx=fxx, verbose=False)
-                        ds = H.xarray(":(TMP|DPT):2 m")[0]
+                        
+                        # FIXED: Safe Dataset Extraction
+                        ds = H.xarray(":(TMP|DPT):2 m")
+                        if isinstance(ds, list): ds = ds[0]
+                        
                         t_key = [k for k in ds.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
                         d_key = [k for k in ds.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
                         
@@ -198,7 +206,8 @@ for cfg in MODEL_CONFIGS:
         for fxx in range(1, 19):
             try:
                 H_fcst = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx, verbose=False)
-                ds = H_fcst.xarray(cfg['search'])[0]
+                ds = H_fcst.xarray(cfg['search'])
+                if isinstance(ds, list): ds = ds[0]
                 
                 if 'nav_lon' in ds.coords: ds = ds.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
                 
@@ -286,6 +295,8 @@ for cfg in MODEL_CONFIGS:
                     ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
                     plot_cities(ax)
+                    
+                    # FIXED: Removed "latitude=" keyword argument here
                     ax.pcolormesh(ds.longitude, ds.latitude, np.ma.masked_where(fog == 0, fog), 
                                   transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
                     
