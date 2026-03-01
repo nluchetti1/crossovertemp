@@ -1,8 +1,11 @@
 name: Hourly Fog Update
+
 on:
   schedule:
-    - cron: '45 23,0-10 * * *'
+    # Runs at 30 minutes past every hour to capture both day and night shift updates
+    - cron: '30 * * * *'
   workflow_dispatch:
+
 jobs:
   run-forecast:
     runs-on: ubuntu-latest
@@ -15,12 +18,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install matplotlib cartopy netCDF4 xarray herbie-data imageio scipy
+
       - name: Execute Fog Processing
         run: python fog_process.py
+
       - name: Commit and Force-Push
         run: |
           git config --global user.name "github-actions[bot]"
