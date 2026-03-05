@@ -75,7 +75,11 @@ if not is_day_shift:
         ds_init = H_init.xarray(":(TMP|DPT):2 m")
         if isinstance(ds_init, list): ds_init = ds_init[0]
         if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+        
+        # FIX: Normalize RTMA Longitude for pure math functions
         lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
+        lons_xover = np.where(lons_xover > 180, lons_xover - 360, lons_xover)
+        
         max_t_grid = np.full(lons_xover.shape, -999.0)
         rtma_grid = np.full(lons_xover.shape, -999.0)
 
@@ -148,6 +152,11 @@ for cfg in MODEL_CONFIGS:
         if isinstance(ds_base, list): ds_base = ds_base[0]
         if 'nav_lon' in ds_base.coords: ds_base = ds_base.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
+        # FIX: Normalize Model Longitude for pure math interpolation
+        base_lons = ds_base.longitude.values
+        base_lons = np.where(base_lons > 180, base_lons - 360, base_lons)
+        base_lats = ds_base.latitude.values
+        
         thresh_dict = {}
         gif_frames = {}
 
@@ -173,11 +182,11 @@ for cfg in MODEL_CONFIGS:
             gif_frames[''] = []
         else:
             if rtma_pts is not None:
-                rtma_grid = interp_to_grid(rtma_pts, rtma_vals, ds_base.longitude.values, ds_base.latitude.values)
+                rtma_grid = interp_to_grid(rtma_pts, rtma_vals, base_lons, base_lats)
                 thresh_dict['_RTMA'] = {'grid': rtma_grid, 'title': f"Observed RTMA Crossover"}
                 gif_frames['_RTMA'] = []
             if asos_pts is not None:
-                asos_grid = interp_to_grid(asos_pts, asos_vals, ds_base.longitude.values, ds_base.latitude.values)
+                asos_grid = interp_to_grid(asos_pts, asos_vals, base_lons, base_lats)
                 thresh_dict['_ASOS'] = {'grid': asos_grid, 'title': f"Observed ASOS/AWOS Crossover"}
                 gif_frames['_ASOS'] = []
 
@@ -211,7 +220,6 @@ for cfg in MODEL_CONFIGS:
 
                 for suffix, info in thresh_dict.items():
                     fog = np.zeros_like(f_temp)
-                    # HRRR/RAP Logic: Mist <= 15kts | Dense <= 15kts (Crossover - 3)
                     fog[(f_temp <= info['grid']) & (f_wind <= 15.0)] = 1
                     fog[(f_temp <= (info['grid'] - 3.0)) & (f_wind <= 15.0)] = 2
 
@@ -243,7 +251,6 @@ for cfg in MODEL_CONFIGS:
         d_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.td.bin"
         w_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.wspd.bin"
 
-        # Download files
         for url, fname in [(t_url, temp_file), (d_url, td_file), (w_url, wspd_file)]:
             try:
                 r = requests.get(url, stream=True, timeout=10)
@@ -275,7 +282,9 @@ for cfg in MODEL_CONFIGS:
             if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: 
                 ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
             
+            # FIX: Normalize NDFD Longitude for pure math interpolation
             ndfd_lons = ds_base.longitude.values
+            ndfd_lons = np.where(ndfd_lons > 180, ndfd_lons - 360, ndfd_lons)
             ndfd_lats = ds_base.latitude.values
             if ndfd_lons.ndim == 1:
                 ndfd_lons, ndfd_lats = np.meshgrid(ndfd_lons, ndfd_lats)
@@ -328,19 +337,15 @@ for cfg in MODEL_CONFIGS:
                     if 'longitude' not in ds_frame.coords and 'lon' in ds_frame.coords: ds_frame = ds_frame.rename({'lon': 'longitude', 'lat': 'latitude'})
                     f_temp = (ds_frame.t2m.values - 273.15) * 9/5 + 32
                     
-                    # Extract NDFD Wind Speed
-                    f_wind = np.full(f_temp.shape, 2.0) # Default to 2 kts if NDFD wind is missing
+                    f_wind = np.full(f_temp.shape, 2.0)
                     if ds_w is not None:
                         try:
                             w_var = list(ds_w.data_vars)[0]
-                            # Using nearest temporal match in case wind steps differ slightly from temp steps
                             f_wind = ds_w[w_var].sel(step=step_delta, method='nearest').values * 1.94384
                         except: pass
 
                     for suffix, info in thresh_dict.items():
                         fog = np.zeros_like(f_temp)
-                        
-                        # NEW NDFD LOGIC: Mist if <= 15kts | Dense if < 3kts
                         fog[(f_temp <= info['grid']) & (f_wind <= 15.0)] = 1
                         fog[(f_temp <= (info['grid'] - 3.0)) & (f_wind < 3.0)] = 2
 
