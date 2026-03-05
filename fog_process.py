@@ -76,7 +76,6 @@ if not is_day_shift:
         if isinstance(ds_init, list): ds_init = ds_init[0]
         if 'nav_lon' in ds_init.coords: ds_init = ds_init.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
-        # FIX: Normalize RTMA Longitude for pure math functions
         lons_xover, lats_xover = ds_init.longitude.values, ds_init.latitude.values
         lons_xover = np.where(lons_xover > 180, lons_xover - 360, lons_xover)
         
@@ -136,7 +135,8 @@ for cfg in MODEL_CONFIGS:
     # ------------------ HERBIE PATH ------------------
     if cfg['source'] == 'herbie':
         found_init = None
-        for h_back in range(2, 6):
+        # NEW: 0-Hour lag to grab the absolute freshest maps
+        for h_back in range(0, 6):
             check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
             try:
                 if Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False).grib:
@@ -145,14 +145,13 @@ for cfg in MODEL_CONFIGS:
             except: continue
         
         if not found_init: continue
-        print(f"\nProcessing {cfg['id']} (Init: {found_init.strftime('%H')}Z)")
+        print(f"\nProcessing {cfg['id']} Maps (Init: {found_init.strftime('%H')}Z)")
 
         H_base = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
         ds_base = H_base.xarray(":(TMP|DPT):2 m")
         if isinstance(ds_base, list): ds_base = ds_base[0]
         if 'nav_lon' in ds_base.coords: ds_base = ds_base.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
         
-        # FIX: Normalize Model Longitude for pure math interpolation
         base_lons = ds_base.longitude.values
         base_lons = np.where(base_lons > 180, base_lons - 360, base_lons)
         base_lats = ds_base.latitude.values
@@ -161,24 +160,38 @@ for cfg in MODEL_CONFIGS:
         gif_frames = {}
 
         if is_day_shift:
-            mod_max_t = np.full(ds_base.t2m.shape, -999.0)
-            native_grid = np.full(ds_base.t2m.shape, 50.0)
-            for fxx_check in range(0, 15):
-                v_time = found_init + timedelta(hours=fxx_check)
-                if 16 <= v_time.hour <= 23:
-                    try:
-                        H_c = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx_check, verbose=False)
-                        ds_c = H_c.xarray(":(TMP|DPT):2 m")
-                        if isinstance(ds_c, list): ds_c = ds_c[0]
-                        t_key = [k for k in ds_c.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
-                        d_key = [k for k in ds_c.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
-                        t_f = (ds_c[t_key].values - 273.15) * 9/5 + 32
-                        d_f = (ds_c[d_key].values - 273.15) * 9/5 + 32
-                        mask = t_f > mod_max_t
-                        mod_max_t[mask] = t_f[mask]
-                        native_grid[mask] = d_f[mask]
-                    except: continue
-            thresh_dict[''] = {'grid': native_grid, 'title': f"Forecasted Crossover ({cfg['id']})"}
+            # NEW: Lag the crossover calculation by 3+ hours to guarantee afternoon heating files exist
+            xover_init = None
+            for h_back in range(3, 8):
+                check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
+                try:
+                    if Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False).grib:
+                        xover_init = check_time
+                        break
+                except: continue
+                
+            if xover_init:
+                print(f"  > Calculating native {cfg['id']} crossover using completed {xover_init.strftime('%H')}Z run...")
+                mod_max_t = np.full(ds_base.t2m.shape, -999.0)
+                native_grid = np.full(ds_base.t2m.shape, 50.0)
+                for fxx_check in range(0, 15):
+                    v_time = xover_init + timedelta(hours=fxx_check)
+                    if 16 <= v_time.hour <= 23:
+                        try:
+                            H_c = Herbie(xover_init, model=cfg['model'], product=cfg['prod'], fxx=fxx_check, verbose=False)
+                            ds_c = H_c.xarray(":(TMP|DPT):2 m")
+                            if isinstance(ds_c, list): ds_c = ds_c[0]
+                            t_key = [k for k in ds_c.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+                            d_key = [k for k in ds_c.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+                            t_f = (ds_c[t_key].values - 273.15) * 9/5 + 32
+                            d_f = (ds_c[d_key].values - 273.15) * 9/5 + 32
+                            mask = t_f > mod_max_t
+                            mod_max_t[mask] = t_f[mask]
+                            native_grid[mask] = d_f[mask]
+                        except: continue
+                thresh_dict[''] = {'grid': native_grid, 'title': f"Forecasted Crossover ({cfg['id']} Init: {xover_init.strftime('%H')}Z)"}
+            else:
+                thresh_dict[''] = {'grid': np.full(ds_base.t2m.shape, 50.0), 'title': f"Forecasted Crossover (Failed)"}
             gif_frames[''] = []
         else:
             if rtma_pts is not None:
@@ -200,7 +213,7 @@ for cfg in MODEL_CONFIGS:
             plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='Crossover Temp (°F)')
             if suffix == '_ASOS': ax.plot(asos_pts[:, 0], asos_pts[:, 1], 'k.', markersize=2, transform=ccrs.PlateCarree())
             plot_cities(ax)
-            plt.title(f"{info['title']} | Init: {found_init.strftime('%H')}Z", fontweight='bold')
+            plt.title(f"{info['title']}", fontweight='bold')
             plt.savefig(os.path.join(OUTPUT_DIR, f"crossover_{cfg['id']}{suffix}.png"), bbox_inches='tight')
             plt.close()
 
@@ -282,7 +295,6 @@ for cfg in MODEL_CONFIGS:
             if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: 
                 ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
             
-            # FIX: Normalize NDFD Longitude for pure math interpolation
             ndfd_lons = ds_base.longitude.values
             ndfd_lons = np.where(ndfd_lons > 180, ndfd_lons - 360, ndfd_lons)
             ndfd_lats = ds_base.latitude.values
