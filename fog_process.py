@@ -135,22 +135,28 @@ for cfg in MODEL_CONFIGS:
     # ------------------ HERBIE PATH ------------------
     if cfg['source'] == 'herbie':
         found_init = None
-        # NEW: 0-Hour lag to grab the absolute freshest maps
         for h_back in range(0, 6):
             check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
             try:
-                if Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False).grib:
-                    found_init = check_time
-                    break
+                # STRICT FIX: Force Herbie to check if the index file actually exists yet
+                H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
+                _ = H_test.index_as_dataframe
+                found_init = check_time
+                break
             except: continue
         
         if not found_init: continue
         print(f"\nProcessing {cfg['id']} Maps (Init: {found_init.strftime('%H')}Z)")
 
-        H_base = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
-        ds_base = H_base.xarray(":(TMP|DPT):2 m")
-        if isinstance(ds_base, list): ds_base = ds_base[0]
-        if 'nav_lon' in ds_base.coords: ds_base = ds_base.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+        # STRICT FIX: Wrapped the base loading in a try/except to prevent total crashes
+        try:
+            H_base = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
+            ds_base = H_base.xarray(":(TMP|DPT):2 m")
+            if isinstance(ds_base, list): ds_base = ds_base[0]
+            if 'nav_lon' in ds_base.coords: ds_base = ds_base.rename({'nav_lon': 'longitude', 'nav_lat': 'latitude'})
+        except Exception as e:
+            print(f"  > Warning: Failed to load base grid for {cfg['id']}. Skipping. Error: {e}")
+            continue
         
         base_lons = ds_base.longitude.values
         base_lons = np.where(base_lons > 180, base_lons - 360, base_lons)
@@ -160,14 +166,14 @@ for cfg in MODEL_CONFIGS:
         gif_frames = {}
 
         if is_day_shift:
-            # NEW: Lag the crossover calculation by 3+ hours to guarantee afternoon heating files exist
             xover_init = None
             for h_back in range(3, 8):
                 check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
                 try:
-                    if Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False).grib:
-                        xover_init = check_time
-                        break
+                    H_test_xover = Herbie(check_time, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
+                    _ = H_test_xover.index_as_dataframe
+                    xover_init = check_time
+                    break
                 except: continue
                 
             if xover_init:
