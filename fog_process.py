@@ -135,20 +135,19 @@ for cfg in MODEL_CONFIGS:
     # ------------------ HERBIE PATH ------------------
     if cfg['source'] == 'herbie':
         found_init = None
-        for h_back in range(0, 6):
+        # REVERTED TO STRICT 2-HOUR LAG
+        for h_back in range(2, 6):
             check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
             try:
-                # STRICT FIX: Force Herbie to check if the index file actually exists yet
-                H_test = Herbie(check_time, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
-                _ = H_test.index_as_dataframe
-                found_init = check_time
-                break
+                # If the grib exists at a 2-hour lag, it's 99% guaranteed to have all 18 hours ready.
+                if Herbie(check_time, model=cfg['model'], product=cfg['prod'], verbose=False).grib:
+                    found_init = check_time
+                    break
             except: continue
         
         if not found_init: continue
         print(f"\nProcessing {cfg['id']} Maps (Init: {found_init.strftime('%H')}Z)")
 
-        # STRICT FIX: Wrapped the base loading in a try/except to prevent total crashes
         try:
             H_base = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
             ds_base = H_base.xarray(":(TMP|DPT):2 m")
@@ -166,38 +165,25 @@ for cfg in MODEL_CONFIGS:
         gif_frames = {}
 
         if is_day_shift:
-            xover_init = None
-            for h_back in range(3, 8):
-                check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
-                try:
-                    H_test_xover = Herbie(check_time, model=cfg['model'], product=cfg['prod'], fxx=1, verbose=False)
-                    _ = H_test_xover.index_as_dataframe
-                    xover_init = check_time
-                    break
-                except: continue
-                
-            if xover_init:
-                print(f"  > Calculating native {cfg['id']} crossover using completed {xover_init.strftime('%H')}Z run...")
-                mod_max_t = np.full(ds_base.t2m.shape, -999.0)
-                native_grid = np.full(ds_base.t2m.shape, 50.0)
-                for fxx_check in range(0, 15):
-                    v_time = xover_init + timedelta(hours=fxx_check)
-                    if 16 <= v_time.hour <= 23:
-                        try:
-                            H_c = Herbie(xover_init, model=cfg['model'], product=cfg['prod'], fxx=fxx_check, verbose=False)
-                            ds_c = H_c.xarray(":(TMP|DPT):2 m")
-                            if isinstance(ds_c, list): ds_c = ds_c[0]
-                            t_key = [k for k in ds_c.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
-                            d_key = [k for k in ds_c.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
-                            t_f = (ds_c[t_key].values - 273.15) * 9/5 + 32
-                            d_f = (ds_c[d_key].values - 273.15) * 9/5 + 32
-                            mask = t_f > mod_max_t
-                            mod_max_t[mask] = t_f[mask]
-                            native_grid[mask] = d_f[mask]
-                        except: continue
-                thresh_dict[''] = {'grid': native_grid, 'title': f"Forecasted Crossover ({cfg['id']} Init: {xover_init.strftime('%H')}Z)"}
-            else:
-                thresh_dict[''] = {'grid': np.full(ds_base.t2m.shape, 50.0), 'title': f"Forecasted Crossover (Failed)"}
+            print(f"  > Calculating native {cfg['id']} crossover using completed {found_init.strftime('%H')}Z run...")
+            mod_max_t = np.full(ds_base.t2m.shape, -999.0)
+            native_grid = np.full(ds_base.t2m.shape, 50.0)
+            for fxx_check in range(0, 15):
+                v_time = found_init + timedelta(hours=fxx_check)
+                if 16 <= v_time.hour <= 23:
+                    try:
+                        H_c = Herbie(found_init, model=cfg['model'], product=cfg['prod'], fxx=fxx_check, verbose=False)
+                        ds_c = H_c.xarray(":(TMP|DPT):2 m")
+                        if isinstance(ds_c, list): ds_c = ds_c[0]
+                        t_key = [k for k in ds_c.data_vars if 't2m' in k or 'tmp' in k.lower()][0]
+                        d_key = [k for k in ds_c.data_vars if 'd2m' in k or 'dpt' in k.lower()][0]
+                        t_f = (ds_c[t_key].values - 273.15) * 9/5 + 32
+                        d_f = (ds_c[d_key].values - 273.15) * 9/5 + 32
+                        mask = t_f > mod_max_t
+                        mod_max_t[mask] = t_f[mask]
+                        native_grid[mask] = d_f[mask]
+                    except: continue
+            thresh_dict[''] = {'grid': native_grid, 'title': f"Forecasted Crossover ({cfg['id']} Init: {found_init.strftime('%H')}Z)"}
             gif_frames[''] = []
         else:
             if rtma_pts is not None:
