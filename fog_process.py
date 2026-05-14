@@ -32,6 +32,7 @@ CITIES = [
 MODEL_CONFIGS = [
     {'id': 'HRRR', 'source': 'herbie', 'model': 'hrrr', 'prod': 'sfc', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
     {'id': 'RAP',  'source': 'herbie', 'model': 'rap',  'prod': 'awp130pgrb', 'search': ':(TMP):2 m|:(UGRD|VGRD):925 mb'},
+    {'id': 'REFS', 'source': 'manual_refs'},
     {'id': 'NDFD', 'source': 'manual_ndfd'}
 ]
 
@@ -242,6 +243,143 @@ for cfg in MODEL_CONFIGS:
                     gif_frames[suffix].append(imageio.imread(f_name))
             except: continue
         
+        for suffix, frames in gif_frames.items():
+            if frames: imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}{suffix}_loop.gif"), frames, fps=2, loop=0)
+
+    # ------------------ REFS PATH ------------------
+    elif cfg['source'] == 'manual_refs':
+        print(f"\nProcessing {cfg['id']} (AWS S3)")
+        found_init = None
+        
+        for h_back in range(2, 14):
+            check_time = (now - timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
+            if check_time.hour not in [0, 6, 12, 18]: continue
+            date_str = check_time.strftime('%Y%m%d')
+            run_str = check_time.strftime('%H')
+            test_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str}/{run_str}/enspost/refs.t{run_str}z.mean.f01.conus.grib2"
+            try:
+                if requests.head(test_url, timeout=5).status_code == 200:
+                    found_init = check_time
+                    break
+            except: continue
+            
+        if not found_init:
+            print("  > Could not find recent REFS run on AWS.")
+            continue
+            
+        print(f"  > Processing REFS Init: {found_init.strftime('%H')}Z")
+        date_str = found_init.strftime('%Y%m%d')
+        run_str = found_init.strftime('%H')
+        
+        def download_refs(fhr):
+            url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str}/{run_str}/enspost/refs.t{run_str}z.mean.f{fhr:02d}.conus.grib2"
+            fname = f"temp_refs_f{fhr:02d}.grib2"
+            if os.path.exists(fname): os.remove(fname)
+            try:
+                r = requests.get(url, stream=True, timeout=15)
+                if r.status_code == 200:
+                    with open(fname, 'wb') as f: shutil.copyfileobj(r.raw, f)
+                    return fname
+            except: pass
+            return None
+
+        base_file = download_refs(1)
+        if not base_file: continue
+        
+        ds_base = xr.open_dataset(base_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+        if 'longitude' not in ds_base.coords and 'lon' in ds_base.coords: ds_base = ds_base.rename({'lon': 'longitude', 'lat': 'latitude'})
+        
+        base_lons = ds_base.longitude.values
+        base_lons = np.where(base_lons > 180, base_lons - 360, base_lons)
+        base_lats = ds_base.latitude.values
+        
+        thresh_dict = {}
+        gif_frames = {}
+
+        if is_day_shift:
+            mod_max_t = np.full(ds_base.t2m.shape, -999.0)
+            native_grid = np.full(ds_base.t2m.shape, 50.0)
+            for fxx_check in range(0, 15):
+                v_time = found_init + timedelta(hours=fxx_check)
+                if 16 <= v_time.hour <= 23:
+                    check_file = download_refs(fxx_check) if fxx_check != 1 else base_file
+                    if not check_file: continue
+                    try:
+                        ds_c = xr.open_dataset(check_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+                        t_val = (ds_c.t2m.values - 273.15) * 9/5 + 32
+                        d_val = (ds_c.d2m.values - 273.15) * 9/5 + 32
+                        mask = t_val > mod_max_t
+                        mod_max_t[mask] = t_val[mask]
+                        native_grid[mask] = d_val[mask]
+                        ds_c.close()
+                    except: pass
+                    if check_file != base_file and os.path.exists(check_file): os.remove(check_file)
+                    
+            thresh_dict[''] = {'grid': native_grid, 'title': f"Forecasted Crossover ({cfg['id']} Init: {found_init.strftime('%H')}Z)"}
+            gif_frames[''] = []
+        else:
+            if rtma_pts is not None:
+                rtma_grid = interp_to_grid(rtma_pts, rtma_vals, base_lons, base_lats)
+                thresh_dict['_RTMA'] = {'grid': rtma_grid, 'title': f"Observed RTMA Crossover"}
+                gif_frames['_RTMA'] = []
+            if asos_pts is not None:
+                asos_grid = interp_to_grid(asos_pts, asos_vals, base_lons, base_lats)
+                thresh_dict['_ASOS'] = {'grid': asos_grid, 'title': f"Observed ASOS/AWOS Crossover"}
+                gif_frames['_ASOS'] = []
+
+        for suffix, info in thresh_dict.items():
+            fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
+            add_map_features(ax)
+            levels = np.arange(20, 82, 2)
+            cmap = plt.cm.turbo
+            norm = mcolors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
+            mesh = ax.pcolormesh(base_lons, base_lats, info['grid'], cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+            plt.colorbar(mesh, ax=ax, shrink=0.8, ticks=levels[::2], label='Crossover Temp (°F)')
+            if suffix == '_ASOS': ax.plot(asos_pts[:, 0], asos_pts[:, 1], 'k.', markersize=2, transform=ccrs.PlateCarree())
+            plot_cities(ax)
+            plt.title(f"{info['title']}", fontweight='bold')
+            plt.savefig(os.path.join(OUTPUT_DIR, f"crossover_{cfg['id']}{suffix}.png"), bbox_inches='tight')
+            plt.close()
+
+        ds_base.close()
+        
+        for fxx in range(1, 19):
+            f_file = download_refs(fxx) if fxx != 1 else base_file
+            if not f_file: continue
+            try:
+                ds_frame = xr.open_dataset(f_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+                f_temp = (ds_frame.t2m.values - 273.15) * 9/5 + 32
+                ds_frame.close()
+                
+                try:
+                    ds_wind = xr.open_dataset(f_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 10})
+                    f_wind = np.sqrt(ds_wind.u10.values**2 + ds_wind.v10.values**2) * 1.94384
+                    ds_wind.close()
+                except:
+                    f_wind = np.full(f_temp.shape, 5.0)
+
+                for suffix, info in thresh_dict.items():
+                    fog = np.zeros_like(f_temp)
+                    fog[(f_temp <= info['grid']) & (f_wind <= 15.0)] = 1
+                    fog[(f_temp <= (info['grid'] - 3.0)) & (f_wind <= 15.0)] = 2
+
+                    fig, ax = plt.subplots(figsize=(12, 7), subplot_kw={'projection': ccrs.PlateCarree()})
+                    add_map_features(ax)
+                    ax.text(1.0, 1.05, 'Dense Fog (< 1/2 SM)', color='purple', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
+                    ax.text(1.0, 1.01, 'Mist (1-3 SM)', color='#E6AC00', fontsize=11, fontweight='bold', ha='right', transform=ax.transAxes)
+                    plot_cities(ax)
+                    ax.pcolormesh(base_lons, base_lats, np.ma.masked_where(fog == 0, fog), transform=ccrs.PlateCarree(), cmap=mcolors.ListedColormap(['#E6AC00', 'purple']), alpha=0.8)
+                    v_str = (found_init + timedelta(hours=fxx)).strftime('%H')
+                    plt.title(f"{cfg['id']}{suffix.replace('_',' ')} Forecast | Init: {found_init.strftime('%H')}Z | Valid: {v_str}Z", loc='left', fontweight='bold')
+                    f_name = os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}{suffix}_f{fxx:02d}.png")
+                    plt.savefig(f_name, bbox_inches='tight', dpi=100); plt.close()
+                    gif_frames[suffix].append(imageio.imread(f_name))
+            except: pass
+            finally:
+                if f_file != base_file and os.path.exists(f_file): os.remove(f_file)
+                
+        if os.path.exists(base_file): os.remove(base_file)
+                
         for suffix, frames in gif_frames.items():
             if frames: imageio.mimsave(os.path.join(OUTPUT_DIR, f"fog_{cfg['id']}{suffix}_loop.gif"), frames, fps=2, loop=0)
 
